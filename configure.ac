@@ -1,31 +1,44 @@
-AC_PREREQ(2.53)
-AC_INIT(gssdp, 0.8.2, http://www.gupnp.org/)
-AM_INIT_AUTOMAKE()
+AC_PREREQ([2.64])
+AC_INIT([gssdp],
+        [0.14.4],
+        [http://bugzilla.gnome.org/enter_bug.cgi?product=gupnp&component=gssdp],
+        [gssdp],
+        [http://www.gupnp.org/])
+
+AC_CONFIG_HEADERS([config.h])
 AC_CONFIG_SRCDIR(libgssdp/gssdp-client.c)
-AM_CONFIG_HEADER(config.h)
-
-m4_ifdef([AM_SILENT_RULES],[AM_SILENT_RULES([yes])],)
-
-AC_ISC_POSIX
-AC_PROG_CC
-AC_STDC_HEADERS
-AC_PROG_LIBTOOL
 AC_CONFIG_MACRO_DIR([m4])
+AC_CONFIG_AUX_DIR([build-aux])
 
-PKG_CHECK_MODULES(LIBGSSDP, glib-2.0 >= 2.18 \
-                            gobject-2.0 >= 2.18 \
-                            libsoup-2.4)
+AM_INIT_AUTOMAKE([1.11 tar-ustar no-dist-gzip dist-xz])
+AM_MAINTAINER_MODE([enable])
 
-LIBGTK_REQUIRED=2.12.0
+GNOME_COMPILE_WARNINGS
+
+AM_SILENT_RULES([yes])
+
+AC_SEARCH_LIBS([strerror],[cposix])
+AC_PROG_CC
+AC_HEADER_STDC
+
+LT_PREREQ([2.2])
+LT_INIT
+
+PKG_CHECK_MODULES(LIBGSSDP, glib-2.0 >= 2.32 \
+                            gobject-2.0 >= 2.32 \
+                            gio-2.0 >= 2.32 \
+                            libsoup-2.4 >= 2.26.1)
+
+LIBGTK_REQUIRED=3.0
 
 AC_ARG_WITH( gtk,
-  AC_HELP_STRING([--without-gtk],[compile without gtk+ support]),
+  AS_HELP_STRING([--without-gtk],[compile without gtk+ support]),
   try_gtk=$withval, try_gtk=yes )
 
 HAVE_LIBGTK=no
 if test x$try_gtk = xyes ; then
     dnl check for gtk+
-    PKG_CHECK_MODULES(LIBGTK, gtk+-2.0 >= $LIBGTK_REQUIRED ,
+    PKG_CHECK_MODULES(LIBGTK, gtk+-3.0 >= $LIBGTK_REQUIRED ,
       [
         HAVE_LIBGTK=yes
         AC_SUBST(LIBGTK_CFLAGS)
@@ -58,20 +71,70 @@ AC_ARG_ENABLE(debug,
 	[  --enable-debug          enable debugging],,
         enable_debug=no)
 if test "x$enable_debug" = "xyes"; then
-        CFLAGS="$CFLAGS -g -Wall -Werror"
+        CFLAGS="$CFLAGS -g -Wall"
 fi
 
-GOBJECT_INTROSPECTION_CHECK([0.6.4])
+AC_ARG_ENABLE([strict-c],
+              AS_HELP_STRING([--enable-strict-c],[Error out on warnings]),,
+              [enable_strict_c=no])
+AS_IF([test "x$[]enable_strict_c" = "xyes"],
+      [CFLAGS="$CFLAGS -Werror"])
+
+GOBJECT_INTROSPECTION_CHECK([0.6.7])
+
+# vapigen
+have_vapigen=no
+AS_IF([test "x$found_introspection" = "xyes"],
+      [
+       dnl output of g-i >= 1.36.0 needs vapigen >= 0.20 to process
+       AC_MSG_CHECKING([whether G-I is 1.36 or newer])
+       VAPIGEN_MIN_VERSION=0.14
+       AS_IF([pkg-config --atleast-version=1.36.0 gobject-introspection-1.0],
+             [
+              AC_MSG_RESULT([yes])
+              VAPIGEN_MIN_VERSION=0.20
+             ],[AC_MSG_RESULT([no])]
+       )
+       GUPNP_PROG_VAPIGEN([$VAPIGEN_MIN_VERSION])
+      ]
+)
+AS_IF([test "x$VAPIGEN" != "x"], [have_vapigen=yes])
+AM_CONDITIONAL([HAVE_VAPIGEN], [test "x$VAPIGEN" != "x"])
+
+dnl Check for Win32
+AC_MSG_CHECKING([for Win32])
+case "$host" in
+    *-*-mingw*)
+        os_win32=yes
+        ;;
+    *)
+        os_win32=no
+        ;;
+esac
+AC_MSG_RESULT([$os_win32])
+AM_CONDITIONAL(OS_WIN32, [test $os_win32 = yes])
 
 GTK_DOC_CHECK([1.0])
 
-AC_OUTPUT([
+AC_CONFIG_FILES([
 Makefile
 libgssdp/Makefile
 tools/Makefile
 tests/Makefile
+tests/gtest/Makefile
+vala/Makefile
 doc/Makefile
 doc/version.xml
 gssdp-1.0.pc
 gssdp-1.0-uninstalled.pc
 ])
+AC_OUTPUT
+
+echo "
+    ${PACKAGE} ${VERSION}
+    ---------------------
+
+    Prefix:                ${prefix}
+    GObject-Introspection: ${found_introspection}
+    VALA bindings:         ${have_vapigen}
+"

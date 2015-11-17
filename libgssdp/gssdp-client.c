@@ -1,6 +1,6 @@
 /* 
  * Copyright (C) 2006, 2007, 2008 OpenedHand Ltd.
- * Copyright (C) 2009 Nokia Corporation, all rights reserved.
+ * Copyright (C) 2009 Nokia Corporation.
  *
  * Author: Jorn Baayen <jorn@openedhand.com>
  *         Zeeshan Ali (Khattak) <zeeshanak@gnome.org>
@@ -18,8 +18,8 @@
  *
  * You should have received a copy of the GNU Library General Public
  * License along with this library; if not, write to the
- * Free Software Foundation, Inc., 59 Temple Place - Suite 330,
- * Boston, MA 02111-1307, USA.
+ * Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor,
+ * Boston, MA 02110-1301, USA.
  */
 
 /**
@@ -31,18 +31,31 @@
  */
 
 #include <config.h>
-#include <sys/socket.h>
 #include <sys/types.h>
+#include <glib.h>
+#ifndef G_OS_WIN32
+#include <sys/socket.h>
 #include <sys/utsname.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#else
+#define _WIN32_WINNT 0x502
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <iphlpapi.h>
+typedef int socklen_t;
+/* from the return value of inet_addr */
+typedef unsigned long in_addr_t;
+#endif
 #include <string.h>
 #include <stdio.h>
 #include <errno.h>
 #include <unistd.h>
+#ifndef G_OS_WIN32
 #include <arpa/inet.h>
 #include <net/if.h>
 #include <ifaddrs.h>
+#endif
 #include <libsoup/soup-headers.h>
 
 #include "gssdp-client.h"
@@ -52,26 +65,45 @@
 #include "gssdp-marshal.h"
 #include "gssdp-protocol.h"
 
-/* Size of the buffer used for reading from the socket */
-#define BUF_SIZE 1024
+#ifndef INET6_ADDRSTRLEN
+#define INET6_ADDRSTRLEN 46
+#endif
 
-G_DEFINE_TYPE (GSSDPClient,
-               gssdp_client,
-               G_TYPE_OBJECT);
+/* Size of the buffer used for reading from the socket */
+#define BUF_SIZE 65536
+
+static void
+gssdp_client_initable_iface_init (gpointer g_iface,
+                                  gpointer iface_data);
+
+G_DEFINE_TYPE_EXTENDED (GSSDPClient,
+                        gssdp_client,
+                        G_TYPE_OBJECT,
+                        0,
+                        G_IMPLEMENT_INTERFACE
+                                (G_TYPE_INITABLE,
+                                 gssdp_client_initable_iface_init));
+
+struct _GSSDPNetworkDevice {
+        char *iface_name;
+        char *host_ip;
+        char *network;
+        struct sockaddr_in mask;
+};
+typedef struct _GSSDPNetworkDevice GSSDPNetworkDevice;
 
 struct _GSSDPClientPrivate {
-        GMainContext      *main_context;
-
         char              *server_id;
-        char              *interface;
-        char              *host_ip;
 
-        GError            **error;
+        guint              socket_ttl;
+        GSSDPNetworkDevice device;
 
         GSSDPSocketSource *request_socket;
         GSSDPSocketSource *multicast_socket;
+        GSSDPSocketSource *search_socket;
 
         gboolean           active;
+        gboolean           initialized;
 };
 
 enum {
@@ -79,9 +111,10 @@ enum {
         PROP_MAIN_CONTEXT,
         PROP_SERVER_ID,
         PROP_IFACE,
+        PROP_NETWORK,
         PROP_HOST_IP,
         PROP_ACTIVE,
-        PROP_ERROR
+        PROP_SOCKET_TTL,
 };
 
 enum {
@@ -91,18 +124,29 @@ enum {
 
 static guint signals[LAST_SIGNAL];
 
-/* Function prototypes */
-static void
-gssdp_client_set_main_context (GSSDPClient  *client,
-                               GMainContext *context);
 static char *
 make_server_id                (void);
 static gboolean
-request_socket_source_cb      (gpointer      user_data);
+request_socket_source_cb      (GIOChannel   *source,
+                               GIOCondition  condition,
+                               gpointer      user_data);
 static gboolean
-multicast_socket_source_cb    (gpointer      user_data);
+multicast_socket_source_cb    (GIOChannel   *source,
+                               GIOCondition  condition,
+                               gpointer      user_data);
 static gboolean
-init_network_info             (GSSDPClient  *client);
+search_socket_source_cb       (GIOChannel   *source,
+                               GIOCondition  condition,
+                               gpointer      user_data);
+
+static gboolean
+init_network_info             (GSSDPClient  *client,
+                               GError      **error);
+
+static gboolean
+gssdp_client_initable_init    (GInitable     *initable,
+                               GCancellable  *cancellable,
+                               GError       **error);
 
 static void
 gssdp_client_init (GSSDPClient *client)
@@ -119,57 +163,120 @@ gssdp_client_init (GSSDPClient *client)
 }
 
 static void
-gssdp_client_constructed (GObject *object)
+gssdp_client_initable_iface_init (gpointer               g_iface,
+                                  G_GNUC_UNUSED gpointer iface_data)
 {
-        GSSDPClient *client = GSSDP_CLIENT (object);
+        GInitableIface *iface = (GInitableIface *)g_iface;
+        iface->init = gssdp_client_initable_init;
+}
+
+static gboolean
+gssdp_client_initable_init (GInitable                   *initable,
+                            G_GNUC_UNUSED GCancellable  *cancellable,
+                            GError                     **error)
+{
+        GSSDPClient *client = GSSDP_CLIENT (initable);
+        GError *internal_error = NULL;
+
+        if (client->priv->initialized)
+                return TRUE;
+
+#ifdef G_OS_WIN32
+        WSADATA wsaData = {0};
+        if (WSAStartup (MAKEWORD (2,2), &wsaData) != 0) {
+                gchar *message;
+
+                message = g_win32_error_message (WSAGetLastError ());
+                g_set_error_literal (error,
+                                     GSSDP_ERROR,
+                                     GSSDP_ERROR_FAILED,
+                                     message);
+                g_free (message);
+
+                return FALSE;
+        }
+#endif
 
         /* Make sure all network info is available to us */
-        if (!init_network_info (client))
-                return;
+        if (!init_network_info (client, &internal_error))
+                goto errors;
 
         /* Set up sockets (Will set errno if it failed) */
         client->priv->request_socket =
                 gssdp_socket_source_new (GSSDP_SOCKET_SOURCE_TYPE_REQUEST,
-                                         gssdp_client_get_host_ip (client));
+                                         gssdp_client_get_host_ip (client),
+                                         client->priv->socket_ttl,
+                                         &internal_error);
         if (client->priv->request_socket != NULL) {
-                g_source_set_callback
-                        ((GSource *) client->priv->request_socket,
-                         request_socket_source_cb,
-                         client,
-                         NULL);
+                gssdp_socket_source_set_callback
+                        (client->priv->request_socket,
+                        (GSourceFunc) request_socket_source_cb,
+                        client);
         } else {
                 goto errors;
         }
 
         client->priv->multicast_socket =
                 gssdp_socket_source_new (GSSDP_SOCKET_SOURCE_TYPE_MULTICAST,
-                                         gssdp_client_get_host_ip (client));
+                                         gssdp_client_get_host_ip (client),
+                                         client->priv->socket_ttl,
+                                         &internal_error);
         if (client->priv->multicast_socket != NULL) {
-                g_source_set_callback
-                        ((GSource *) client->priv->multicast_socket,
-                         multicast_socket_source_cb,
-                         client,
-                         NULL);
+                gssdp_socket_source_set_callback
+                        (client->priv->multicast_socket,
+                         (GSourceFunc) multicast_socket_source_cb,
+                         client);
+        } else {
+                goto errors;
         }
 
+        /* Setup send socket. For security reasons, it is not recommended to
+         * send M-SEARCH with source port == SSDP_PORT */
+        client->priv->search_socket = gssdp_socket_source_new
+                                        (GSSDP_SOCKET_SOURCE_TYPE_SEARCH,
+                                         gssdp_client_get_host_ip (client),
+                                         client->priv->socket_ttl,
+                                         &internal_error);
+        if (client->priv->search_socket != NULL) {
+                gssdp_socket_source_set_callback
+                                        (client->priv->search_socket,
+                                         (GSourceFunc) search_socket_source_cb,
+                                         client);
+        }
  errors:
-        if (!client->priv->request_socket || !client->priv->multicast_socket) {
-                if (client->priv->error)
-                        g_set_error_literal (client->priv->error,
-                                             GSSDP_ERROR,
-                                             GSSDP_ERROR_FAILED,
-                                             g_strerror (errno));
+        if (!client->priv->request_socket ||
+            !client->priv->multicast_socket ||
+            !client->priv->search_socket) {
+                g_propagate_error (error, internal_error);
 
-                return;
+                if (client->priv->request_socket) {
+                        g_object_unref (client->priv->request_socket);
+
+                        client->priv->request_socket = NULL;
+                }
+
+                if (client->priv->multicast_socket) {
+                        g_object_unref (client->priv->multicast_socket);
+
+                        client->priv->multicast_socket = NULL;
+                }
+
+                if (client->priv->search_socket) {
+                        g_object_unref (client->priv->search_socket);
+
+                        client->priv->search_socket = NULL;
+                }
+
+                return FALSE;
         }
 
-        g_source_attach ((GSource *) client->priv->request_socket,
-                         client->priv->main_context);
-        g_source_unref ((GSource *) client->priv->request_socket);
+        gssdp_socket_source_attach (client->priv->request_socket);
+        gssdp_socket_source_attach (client->priv->multicast_socket);
+        gssdp_socket_source_attach (client->priv->search_socket);
 
-        g_source_attach ((GSource *) client->priv->multicast_socket,
-                         client->priv->main_context);
-        g_source_unref ((GSource *) client->priv->multicast_socket);
+        client->priv->initialized = TRUE;
+
+        return TRUE;
 }
 
 static void
@@ -189,14 +296,20 @@ gssdp_client_get_property (GObject    *object,
                          gssdp_client_get_server_id (client));
                 break;
         case PROP_MAIN_CONTEXT:
+                g_warning ("GSSDPClient:main-context is deprecated."
+                           " Please use g_main_context_push_thread_default()");
                 g_value_set_pointer
                         (value,
                          (gpointer)
-                          gssdp_client_get_main_context (client));
+                          g_main_context_get_thread_default ());
                 break;
         case PROP_IFACE:
                 g_value_set_string (value,
                                     gssdp_client_get_interface (client));
+                break;
+        case PROP_NETWORK:
+                g_value_set_string (value,
+                                    gssdp_client_get_network (client));
                 break;
         case PROP_HOST_IP:
                 g_value_set_string (value,
@@ -204,6 +317,9 @@ gssdp_client_get_property (GObject    *object,
                 break;
         case PROP_ACTIVE:
                 g_value_set_boolean (value, client->priv->active);
+                break;
+        case PROP_SOCKET_TTL:
+                g_value_set_uint (value, client->priv->socket_ttl);
                 break;
         default:
                 G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
@@ -227,17 +343,21 @@ gssdp_client_set_property (GObject      *object,
                                             g_value_get_string (value));
                 break;
         case PROP_MAIN_CONTEXT:
-                gssdp_client_set_main_context (client,
-                                               g_value_get_pointer (value));
-                break;
-        case PROP_ERROR:
-                client->priv->error = g_value_get_pointer (value);
+                if (g_value_get_pointer (value) != NULL)
+                        g_warning ("GSSDPClient:main-context is deprecated."
+                                   " Please use g_main_context_push_thread_default()");
                 break;
         case PROP_IFACE:
-                client->priv->interface = g_value_dup_string (value);
+                client->priv->device.iface_name = g_value_dup_string (value);
+                break;
+        case PROP_NETWORK:
+                client->priv->device.network = g_value_dup_string (value);
                 break;
         case PROP_ACTIVE:
                 client->priv->active = g_value_get_boolean (value);
+                break;
+        case PROP_SOCKET_TTL:
+                client->priv->socket_ttl = g_value_get_uint (value);
                 break;
         default:
                 G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
@@ -254,19 +374,18 @@ gssdp_client_dispose (GObject *object)
 
         /* Destroy the SocketSources */
         if (client->priv->request_socket) {
-                g_source_destroy ((GSource *) client->priv->request_socket);
+                g_object_unref (client->priv->request_socket);
                 client->priv->request_socket = NULL;
         }
 
         if (client->priv->multicast_socket) {
-                g_source_destroy ((GSource *) client->priv->multicast_socket);
+                g_object_unref (client->priv->multicast_socket);
                 client->priv->multicast_socket = NULL;
         }
 
-        /* Unref the context */
-        if (client->priv->main_context) {
-                g_main_context_unref (client->priv->main_context);
-                client->priv->main_context = NULL;
+        if (client->priv->search_socket) {
+                g_object_unref (client->priv->search_socket);
+                client->priv->search_socket = NULL;
         }
 
         G_OBJECT_CLASS (gssdp_client_parent_class)->dispose (object);
@@ -278,10 +397,14 @@ gssdp_client_finalize (GObject *object)
         GSSDPClient *client;
 
         client = GSSDP_CLIENT (object);
+#ifdef G_OS_WIN32
+        WSACleanup ();
+#endif
 
         g_free (client->priv->server_id);
-        g_free (client->priv->interface);
-        g_free (client->priv->host_ip);
+        g_free (client->priv->device.iface_name);
+        g_free (client->priv->device.host_ip);
+        g_free (client->priv->device.network);
 
         G_OBJECT_CLASS (gssdp_client_parent_class)->finalize (object);
 }
@@ -291,18 +414,17 @@ gssdp_client_class_init (GSSDPClientClass *klass)
 {
         GObjectClass *object_class;
 
-	object_class = G_OBJECT_CLASS (klass);
+        object_class = G_OBJECT_CLASS (klass);
 
-	object_class->constructed = gssdp_client_constructed;
-	object_class->set_property = gssdp_client_set_property;
-	object_class->get_property = gssdp_client_get_property;
-	object_class->dispose      = gssdp_client_dispose;
-	object_class->finalize     = gssdp_client_finalize;
+        object_class->set_property = gssdp_client_set_property;
+        object_class->get_property = gssdp_client_get_property;
+        object_class->dispose      = gssdp_client_dispose;
+        object_class->finalize     = gssdp_client_finalize;
 
         g_type_class_add_private (klass, sizeof (GSSDPClientPrivate));
 
         /**
-         * GSSDPClient:server-id
+         * GSSDPClient:server-id:
          *
          * The SSDP server's identifier.
          **/
@@ -319,9 +441,10 @@ gssdp_client_class_init (GSSDPClientClass *klass)
                           G_PARAM_STATIC_BLURB));
 
         /**
-         * GSSDPClient:main-context
+         * GSSDPClient:main-context: (skip)
          *
          * The #GMainContext to use. Set to NULL to use the default.
+         * Deprecated: 0.11.2: Use g_main_context_push_thread_default().
          **/
         g_object_class_install_property
                 (object_class,
@@ -335,26 +458,7 @@ gssdp_client_class_init (GSSDPClientClass *klass)
                           G_PARAM_STATIC_BLURB));
 
         /**
-         * GSSDPClient:error
-         *
-         * Internal property.
-         *
-         * Stability: Private
-         **/
-        g_object_class_install_property
-                (object_class,
-                 PROP_ERROR,
-                 g_param_spec_pointer
-                         ("error",
-                          "Error",
-                          "Location where to store the constructor GError, "
-                          "if any.",
-                          G_PARAM_WRITABLE | G_PARAM_CONSTRUCT_ONLY |
-                          G_PARAM_STATIC_NAME | G_PARAM_STATIC_NICK |
-                          G_PARAM_STATIC_BLURB));
-
-        /**
-         * GSSDPClient:interface
+         * GSSDPClient:interface:
          *
          * The name of the network interface this client is associated with.
          * Set to NULL to autodetect.
@@ -374,7 +478,31 @@ gssdp_client_class_init (GSSDPClientClass *klass)
                           G_PARAM_STATIC_BLURB));
 
         /**
-         * GSSDPClient:host-ip
+         * GSSDPClient:network:
+         *
+         * The network this client is currently connected to. You could set this
+         * to anything you want to identify the network this client is
+         * associated with. If you are using #GUPnPContextManager and associated
+         * interface is a WiFi interface, this property is set to the ESSID of
+         * the network. Otherwise, expect this to be the network IP address by
+         * default.
+         **/
+        g_object_class_install_property
+                (object_class,
+                 PROP_NETWORK,
+                 g_param_spec_string
+                         ("network",
+                          "Network ID",
+                          "The network this client is currently connected to.",
+                          NULL,
+                          G_PARAM_READWRITE |
+                          G_PARAM_CONSTRUCT |
+                          G_PARAM_STATIC_NAME |
+                          G_PARAM_STATIC_NICK |
+                          G_PARAM_STATIC_BLURB));
+
+        /**
+         * GSSDPClient:host-ip:
          *
          * The IP address of the assoicated network interface.
          **/
@@ -392,7 +520,7 @@ gssdp_client_class_init (GSSDPClientClass *klass)
                                       G_PARAM_STATIC_BLURB));
 
         /**
-         * GSSDPClient:active
+         * GSSDPClient:active:
          *
          * Whether this client is active or not (passive). When active
          * (default), the client sends messages on the network, otherwise
@@ -413,7 +541,27 @@ gssdp_client_class_init (GSSDPClientClass *klass)
                           G_PARAM_STATIC_BLURB));
 
         /**
-         * GSSDPClient::message-received
+         * GSSDPClient:socket-ttl:
+         *
+         * Time-to-live value to use for all sockets created by this client.
+         * If not set (or set to 0) the value recommended by UPnP will be used.
+         * This property can only be set during object construction.
+         */
+        g_object_class_install_property
+                (object_class,
+                 PROP_SOCKET_TTL,
+                 g_param_spec_uint
+                        ("socket-ttl",
+                         "Socket TTL",
+                         "Time To Live for client's sockets",
+                         0, 255,
+                         0,
+                         G_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY |
+                         G_PARAM_STATIC_NAME | G_PARAM_STATIC_NICK |
+                         G_PARAM_STATIC_BLURB));
+
+        /**
+         * GSSDPClient::message-received: (skip)
          *
          * Internal signal.
          *
@@ -435,57 +583,48 @@ gssdp_client_class_init (GSSDPClientClass *klass)
 }
 
 /**
- * gssdp_client_new
- * @main_context: The #GMainContext to associate with, or NULL
- * @interface: The name of the network interface, or %NULL for auto-detection.
+ * gssdp_client_new:
+ * @main_context: (allow-none): Deprecated: 0.11.2: Always set to NULL. If you want to
+ *                specify a context use g_main_context_push_thread_default()
+ * @iface: The name of the network interface, or %NULL for auto-detection.
  * @error: Location to store error, or NULL
  *
  * Return value: A new #GSSDPClient object.
  **/
 GSSDPClient *
 gssdp_client_new (GMainContext *main_context,
-                  const char   *interface,
+                  const char   *iface,
                   GError      **error)
 {
-        return g_object_new (GSSDP_TYPE_CLIENT,
-                             "main-context", main_context,
-                             "interface", interface,
-                             "error", error,
-                             NULL);
+        if (main_context) {
+                g_warning ("GSSDPClient:main-context is deprecated."
+                           " Please use g_main_context_push_thread_default()");
+        }
+
+        return g_initable_new (GSSDP_TYPE_CLIENT,
+                               NULL,
+                               error,
+                               "interface", iface,
+                               NULL);
 }
 
-/**
- * Sets the GMainContext @client is associated with to @main_context
- **/
-static void
-gssdp_client_set_main_context (GSSDPClient  *client,
-                               GMainContext *main_context)
-{
-        g_return_if_fail (GSSDP_IS_CLIENT (client));
-
-        /* A NULL main_context is fine */
-        if (main_context)
-                client->priv->main_context = g_main_context_ref (main_context);
-
-        g_object_notify (G_OBJECT (client), "main-context");
-}
-
-/**
- * gssdp_client_get_main_context
+/*
+ * gssdp_client_get_main_context: (skip)
  * @client: A #GSSDPClient
  *
- * Return value: The #GMainContext @client is associated with, or NULL.
+ * Returns: (transfer none): The #GMainContext @client is associated with, or NULL.
+ * Deprecated: 0.11.2: Returns g_main_context_get_thread_default()
  **/
 GMainContext *
 gssdp_client_get_main_context (GSSDPClient *client)
 {
         g_return_val_if_fail (GSSDP_IS_CLIENT (client), NULL);
 
-        return client->priv->main_context;
+        return g_main_context_get_thread_default ();
 }
 
 /**
- * gssdp_client_set_server_id
+ * gssdp_client_set_server_id:
  * @client: A #GSSDPClient
  * @server_id: The server ID
  *
@@ -509,7 +648,7 @@ gssdp_client_set_server_id (GSSDPClient *client,
 }
 
 /**
- * gssdp_client_get_server_id
+ * gssdp_client_get_server_id:
  * @client: A #GSSDPClient
  *
  * Return value: The server ID.
@@ -523,7 +662,7 @@ gssdp_client_get_server_id (GSSDPClient *client)
 }
 
 /**
- * gssdp_client_get_interface
+ * gssdp_client_get_interface:
  * @client: A #GSSDPClient
  *
  * Get the name of the network interface associated to @client.
@@ -535,11 +674,11 @@ gssdp_client_get_interface (GSSDPClient *client)
 {
         g_return_val_if_fail (GSSDP_IS_CLIENT (client), NULL);
 
-        return client->priv->interface;
+        return client->priv->device.iface_name;
 }
 
 /**
- * gssdp_client_get_host_ip
+ * gssdp_client_get_host_ip:
  * @client: A #GSSDPClient
  *
  * Get the IP address we advertise ourselves as using.
@@ -551,11 +690,51 @@ gssdp_client_get_host_ip (GSSDPClient *client)
 {
         g_return_val_if_fail (GSSDP_IS_CLIENT (client), NULL);
 
-        return client->priv->host_ip;
+        return client->priv->device.host_ip;
 }
 
 /**
- * gssdp_client_get_active
+ * gssdp_client_set_network:
+ * @client: A #GSSDPClient
+ * @network: The string identifying the network
+ *
+ * Sets the network identification of @client to @network.
+ **/
+void
+gssdp_client_set_network (GSSDPClient *client,
+                          const char  *network)
+{
+        g_return_if_fail (GSSDP_IS_CLIENT (client));
+
+        if (client->priv->device.network) {
+                g_free (client->priv->device.network);
+                client->priv->device.network = NULL;
+        }
+
+        if (network)
+                client->priv->device.network = g_strdup (network);
+
+        g_object_notify (G_OBJECT (client), "network");
+}
+
+/**
+ * gssdp_client_get_network:
+ * @client: A #GSSDPClient
+ *
+ * Get the network this client is associated with.
+ *
+ * Return value: The network identification. This string should not be freed.
+ **/
+const char *
+gssdp_client_get_network (GSSDPClient *client)
+{
+        g_return_val_if_fail (GSSDP_IS_CLIENT (client), NULL);
+
+        return client->priv->device.network;
+}
+
+/**
+ * gssdp_client_get_active:
  * @client: A #GSSDPClient
  *
  * Return value: %TRUE if @client is active, %FALSE otherwise.
@@ -569,7 +748,7 @@ gssdp_client_get_active (GSSDPClient *client)
 }
 
 /**
- * _gssdp_client_send_message
+ * _gssdp_client_send_message:
  * @client: A #GSSDPClient
  * @dest_ip: The destination IP address, or NULL to broadcast
  * @dest_port: The destination port, or NULL for default
@@ -578,13 +757,17 @@ gssdp_client_get_active (GSSDPClient *client)
  * Sends @message to @dest_ip.
  **/
 void
-_gssdp_client_send_message (GSSDPClient *client,
-                            const char  *dest_ip,
-                            gushort      dest_port,
-                            const char  *message)
+_gssdp_client_send_message (GSSDPClient      *client,
+                            const char       *dest_ip,
+                            gushort           dest_port,
+                            const char       *message,
+                            _GSSDPMessageType type)
 {
-        struct sockaddr_in addr;
-        int socket_fd, res;
+        gssize res;
+        GError *error = NULL;
+        GInetAddress *inet_address = NULL;
+        GSocketAddress *address = NULL;
+        GSocket *socket;
 
         g_return_if_fail (GSSDP_IS_CLIENT (client));
         g_return_if_fail (message != NULL);
@@ -601,33 +784,53 @@ _gssdp_client_send_message (GSSDPClient *client,
         if (dest_port == 0)
                 dest_port = SSDP_PORT;
 
-        socket_fd = gssdp_socket_source_get_fd (client->priv->request_socket);
+        if (type == _GSSDP_DISCOVERY_REQUEST)
+                socket = gssdp_socket_source_get_socket
+                                        (client->priv->search_socket);
+        else
+                socket = gssdp_socket_source_get_socket
+                                        (client->priv->request_socket);
 
-        memset (&addr, 0, sizeof (addr));
+        inet_address = g_inet_address_new_from_string (dest_ip);
+        address = g_inet_socket_address_new (inet_address, dest_port);
 
-        addr.sin_family      = AF_INET;
-        addr.sin_port        = htons (dest_port);
-        addr.sin_addr.s_addr = inet_addr (dest_ip);
-
-        res = sendto (socket_fd,
-                      message,
-                      strlen (message),
-                      0,
-                      (struct sockaddr *) &addr,
-                      sizeof (addr));
+        res = g_socket_send_to (socket,
+                                address,
+                                message,
+                                strlen (message),
+                                NULL,
+                                &error);
 
         if (res == -1) {
-                g_warning ("sendto: Error %d sending message: %s",
-                           errno, strerror (errno));
+                g_warning ("Error sending SSDP packet to %s: %s",
+                           dest_ip,
+                           error->message);
+                g_error_free (error);
         }
+
+        g_object_unref (address);
+        g_object_unref (inet_address);
 }
 
-/**
+/*
  * Generates the default server ID
- **/
+ */
 static char *
 make_server_id (void)
 {
+#ifdef G_OS_WIN32
+        OSVERSIONINFO versioninfo;
+        versioninfo.dwOSVersionInfoSize = sizeof (OSVERSIONINFO);
+        if (GetVersionEx (&versioninfo)) {
+                return g_strdup_printf ("Microsoft Windows/%ld.%ld GSSDP/%s",
+                                        versioninfo.dwMajorVersion,
+                                        versioninfo.dwMinorVersion,
+                                        VERSION);
+        } else {
+                return g_strdup_printf ("Microsoft Windows GSSDP/%s",
+                                        VERSION);
+        }
+#else
         struct utsname sysinfo;
 
         uname (&sysinfo);
@@ -636,6 +839,7 @@ make_server_id (void)
                                 sysinfo.sysname,
                                 sysinfo.version,
                                 VERSION);
+#endif
 }
 
 static gboolean
@@ -644,7 +848,9 @@ parse_http_request (char                *buf,
                     SoupMessageHeaders **headers,
                     int                 *type)
 {
-        char *req_method;
+        char *req_method = NULL;
+        char *path = NULL;
+        SoupHTTPVersion version;
 
         *headers = soup_message_headers_new (SOUP_MESSAGE_HEADERS_REQUEST);
 
@@ -652,8 +858,10 @@ parse_http_request (char                *buf,
                                         len,
                                         *headers,
                                         &req_method,
-                                        NULL,
-                                        NULL) == SOUP_STATUS_OK) {
+                                        &path,
+                                        &version) == SOUP_STATUS_OK &&
+            version == SOUP_HTTP_1_1 &&
+            (path && g_ascii_strncasecmp (path, "*", 1) == 0)) {
                 if (g_ascii_strncasecmp (req_method,
                                          SSDP_SEARCH_METHOD,
                                          strlen (SSDP_SEARCH_METHOD)) == 0)
@@ -667,10 +875,19 @@ parse_http_request (char                *buf,
 
                 g_free (req_method);
 
+                if (path)
+                        g_free (path);
+
                 return TRUE;
         } else {
                 soup_message_headers_free (*headers);
                 *headers = NULL;
+
+                if (path)
+                        g_free (path);
+
+                if (req_method)
+                        g_free (req_method);
 
                 return FALSE;
         }
@@ -706,40 +923,39 @@ parse_http_response (char                *buf,
         }
 }
 
-/**
+/*
  * Called when data can be read from the socket
- **/
+ */
 static gboolean
-socket_source_cb (GSSDPSocketSource *socket, GSSDPClient *client)
+socket_source_cb (GSSDPSocketSource *socket_source, GSSDPClient *client)
 {
-        int fd, type, len;
-        ssize_t bytes;
+        int type, len;
         char buf[BUF_SIZE], *end;
+        SoupMessageHeaders *headers = NULL;
+        GSocket *socket;
+        GSocketAddress *address = NULL;
+        gssize bytes;
+        GInetAddress *inetaddr;
+        char *ip_string = NULL;
+        guint16 port;
+        GError *error = NULL;
+        in_addr_t our_addr;
+        in_addr_t mask;
         struct sockaddr_in addr;
-        socklen_t addr_size;
-        SoupMessageHeaders *headers;
-        struct in_addr our_addr;
-        in_addr_t our_network;
-        in_addr_t recv_network;
 
-        /* Get FD */
-        fd = gssdp_socket_source_get_fd (socket);
-
-        /* Read data */
-        addr_size = sizeof (addr);
-        
-        bytes = recvfrom (fd,
-                          buf,
-                          BUF_SIZE - 1, /* Leave space for trailing \0 */
-                          MSG_TRUNC,
-                          (struct sockaddr *) &addr,
-                          &addr_size);
+        /* Get Socket */
+        socket = gssdp_socket_source_get_socket (socket_source);
+        bytes = g_socket_receive_from (socket,
+                                       &address,
+                                       buf,
+                                       BUF_SIZE - 1,
+                                       NULL,
+                                       &error);
         if (bytes == -1) {
-                g_warning ("Failed to read from socket: %d (%s)",
-                           errno,
-                           strerror (errno));
+                g_warning ("Failed to receive from socket: %s",
+                           error->message);
 
-                return TRUE;
+                goto out;
         }
 
         /* We need the following lines to make sure the right client received
@@ -748,18 +964,29 @@ socket_source_cb (GSSDPSocketSource *socket, GSSDPClient *client)
          * on this socket from a particular interface but AFAIK that is not
          * possible, at least not in a portable way.
          */
-        recv_network = inet_netof (addr.sin_addr);
-        our_addr.s_addr = inet_addr (gssdp_client_get_host_ip (client));
-        our_network = inet_netof (our_addr);
-        if (recv_network != our_network)
-                return TRUE;
+
+        if (!g_socket_address_to_native (address,
+                                         &addr,
+                                         sizeof (struct sockaddr_in),
+                                         &error)) {
+                g_warning ("Could not convert address to native: %s",
+                           error->message);
+
+                goto out;
+        }
+
+        mask = client->priv->device.mask.sin_addr.s_addr;
+        our_addr = inet_addr (gssdp_client_get_host_ip (client));
+
+        if ((addr.sin_addr.s_addr & mask) != (our_addr & mask))
+                goto out;
 
         if (bytes >= BUF_SIZE) {
                 g_warning ("Received packet of %u bytes, but the maximum "
                            "buffer size is %d. Packed dropped.",
                            (unsigned int) bytes, BUF_SIZE);
 
-                return TRUE;
+                goto out;
         }
 
         /* Add trailing \0 */
@@ -771,7 +998,7 @@ socket_source_cb (GSSDPSocketSource *socket, GSSDPClient *client)
                 g_warning ("Received packet lacks \"\\r\\n\\r\\n\" sequence. "
                            "Packed dropped.");
 
-                return TRUE;
+                goto out;
         }
 
         len = end - buf + 2;
@@ -793,24 +1020,41 @@ socket_source_cb (GSSDPSocketSource *socket, GSSDPClient *client)
         }
         
         /* Emit signal if parsing succeeded */
+        inetaddr = g_inet_socket_address_get_address (
+                                        G_INET_SOCKET_ADDRESS (address));
+        ip_string = g_inet_address_to_string (inetaddr);
+        port = g_inet_socket_address_get_port (
+                                        G_INET_SOCKET_ADDRESS (address));
         if (type >= 0) {
                 g_signal_emit (client,
                                signals[MESSAGE_RECEIVED],
                                0,
-                               inet_ntoa (addr.sin_addr),
-                               ntohs (addr.sin_port),
+                               ip_string,
+                               port,
                                type,
                                headers);
         }
 
+out:
+        if (error)
+                g_error_free (error);
+
+        if (ip_string)
+                g_free (ip_string);
+
         if (headers)
                 soup_message_headers_free (headers);
+
+        if (address)
+                g_object_unref (address);
 
         return TRUE;
 }
 
 static gboolean
-request_socket_source_cb (gpointer user_data)
+request_socket_source_cb (G_GNUC_UNUSED GIOChannel  *source,
+                          G_GNUC_UNUSED GIOCondition condition,
+                          gpointer                   user_data)
 {
         GSSDPClient *client;
 
@@ -820,7 +1064,9 @@ request_socket_source_cb (gpointer user_data)
 }
 
 static gboolean
-multicast_socket_source_cb (gpointer user_data)
+multicast_socket_source_cb (G_GNUC_UNUSED GIOChannel  *source,
+                            G_GNUC_UNUSED GIOCondition condition,
+                            gpointer                   user_data)
 {
         GSSDPClient *client;
 
@@ -829,111 +1075,271 @@ multicast_socket_source_cb (gpointer user_data)
         return socket_source_cb (client->priv->multicast_socket, client);
 }
 
+static gboolean
+search_socket_source_cb (G_GNUC_UNUSED GIOChannel  *source,
+                         G_GNUC_UNUSED GIOCondition condition,
+                         gpointer                   user_data)
+{
+        GSSDPClient *client;
+
+        client = GSSDP_CLIENT (user_data);
+
+        return socket_source_cb (client->priv->search_socket, client);
+}
+
+#ifdef G_OS_WIN32
+static gboolean
+is_primary_adapter (PIP_ADAPTER_ADDRESSES adapter)
+{
+        int family =
+                adapter->FirstUnicastAddress->Address.lpSockaddr->sa_family;
+
+        return !(adapter->IfType == IF_TYPE_SOFTWARE_LOOPBACK ||
+                 family == AF_INET6);
+}
+
+static gboolean
+extract_address_and_prefix (PIP_ADAPTER_UNICAST_ADDRESS  adapter,
+                            PIP_ADAPTER_PREFIX           prefix,
+                            char                        *iface,
+                            char                        *network) {
+        DWORD ret = 0;
+        DWORD len = INET6_ADDRSTRLEN;
+
+        ret = WSAAddressToStringA (adapter->Address.lpSockaddr,
+                                   adapter->Address.iSockaddrLength,
+                                   NULL,
+                                   iface,
+                                   &len);
+        if (ret != 0)
+                return FALSE;
+
+        if (prefix) {
+                ret = WSAAddressToStringA (prefix->Address.lpSockaddr,
+                                           prefix->Address.iSockaddrLength,
+                                           NULL,
+                                           network,
+                                           &len);
+                if (ret != 0)
+                        return FALSE;
+        } else if (strcmp (iface, "127.0.0.1"))
+                strcpy (network, "127.0.0.0");
+        else
+                return FALSE;
+
+        return TRUE;
+}
+#endif
+
 /*
  * Get the host IP for the specified interface. If no interface is specified,
  * it gets the IP of the first up & running interface and sets @interface
  * appropriately.
  */
-static char *
-get_host_ip (char **interface)
-{
-        struct ifaddrs *ifa_list, *ifa;
-        char *ret;
-        GList *up_ifaces, *iface;
 
-        ret = NULL;
+static gboolean
+get_host_ip (GSSDPNetworkDevice *device)
+{
+#ifdef G_OS_WIN32
+        GList *up_ifaces = NULL, *ifaceptr = NULL;
+        ULONG flags = GAA_FLAG_INCLUDE_PREFIX |
+                      GAA_FLAG_SKIP_DNS_SERVER |
+                      GAA_FLAG_SKIP_MULTICAST;
+        DWORD size = 15360; /* Use 15k buffer initially as documented in MSDN */
+        DWORD ret;
+        PIP_ADAPTER_ADDRESSES adapters_addresses;
+        PIP_ADAPTER_ADDRESSES adapter;
+
+        do {
+                adapters_addresses = (PIP_ADAPTER_ADDRESSES) g_malloc0 (size);
+                ret = GetAdaptersAddresses (AF_UNSPEC,
+                                            flags,
+                                            NULL,
+                                            adapters_addresses,
+                                            &size);
+                if (ret == ERROR_BUFFER_OVERFLOW)
+                        g_free (adapters_addresses);
+        } while (ret == ERROR_BUFFER_OVERFLOW);
+
+        if (ret == ERROR_SUCCESS)
+                for (adapter = adapters_addresses;
+                     adapter != NULL;
+                     adapter = adapter->Next) {
+                        if (adapter->FirstUnicastAddress == NULL)
+                                continue;
+                        if (adapter->OperStatus != IfOperStatusUp)
+                                continue;
+                        /* skip Point-to-Point devices */
+                        if (adapter->IfType == IF_TYPE_PPP)
+                                continue;
+
+                        if (device->iface_name != NULL &&
+                            strcmp (device->iface_name, adapter->AdapterName) != 0)
+                                continue;
+
+                        /* I think that IPv6 is done via pseudo-adapters, so
+                         * that there are either IPv4 or IPv6 addresses defined
+                         * on the adapter.
+                         * Loopback-Devices and IPv6 go to the end of the list,
+                         * IPv4 to the front
+                         */
+                        if (is_primary_adapter (adapter))
+                                up_ifaces = g_list_prepend (up_ifaces, adapter);
+                        else
+                                up_ifaces = g_list_append (up_ifaces, adapter);
+                }
+
+        for (ifaceptr = up_ifaces;
+             ifaceptr != NULL;
+             ifaceptr = ifaceptr->next) {
+                char ip[INET6_ADDRSTRLEN];
+                char prefix[INET6_ADDRSTRLEN];
+                const char *p, *q;
+                PIP_ADAPTER_ADDRESSES adapter;
+                PIP_ADAPTER_UNICAST_ADDRESS address;
+
+                p = NULL;
+
+                adapter = (PIP_ADAPTER_ADDRESSES) ifaceptr->data;
+                address = adapter->FirstUnicastAddress;
+
+                if (address->Address.lpSockaddr->sa_family != AF_INET)
+                        continue;
+
+                if (extract_address_and_prefix (address,
+                                                adapter->FirstPrefix,
+                                                ip,
+                                                prefix)) {
+                                                p = ip;
+                                                q = prefix;
+                }
+
+                if (p != NULL) {
+                        device->host_ip = g_strdup (p);
+                        /* This relies on the compiler doing an arithmetic
+                         * shift here!
+                         */
+                        gint32 mask = 0;
+                        if (adapter->FirstPrefix->PrefixLength > 0) {
+                                mask = (gint32) 0x80000000;
+                                mask >>= adapter->FirstPrefix->PrefixLength - 1;
+                        }
+                        device->mask.sin_family = AF_INET;
+                        device->mask.sin_port = 0;
+                        device->mask.sin_addr.s_addr = htonl ((guint32) mask);
+
+                        if (device->iface_name == NULL)
+                                device->iface_name = g_strdup (adapter->AdapterName);
+                        if (device->network == NULL)
+                                device->network = g_strdup (q);
+                        break;
+                }
+
+        }
+        g_list_free (up_ifaces);
+        g_free (adapters_addresses);
+
+        return TRUE;
+#else
+        struct ifaddrs *ifa_list, *ifa;
+        GList *up_ifaces, *ifaceptr;
+
         up_ifaces = NULL;
 
         if (getifaddrs (&ifa_list) != 0) {
                 g_error ("Failed to retrieve list of network interfaces:\n%s\n",
                          strerror (errno));
 
-                return NULL;
+                return FALSE;
         }
 
         for (ifa = ifa_list; ifa != NULL; ifa = ifa->ifa_next) {
                 if (ifa->ifa_addr == NULL)
                         continue;
 
-                if (*interface && strcmp (*interface, ifa->ifa_name) != 0)
+                if (device->iface_name &&
+                    strcmp (device->iface_name, ifa->ifa_name) != 0)
                         continue;
                 else if (!(ifa->ifa_flags & IFF_UP))
                         continue;
-		else if ((ifa->ifa_flags & IFF_POINTOPOINT))
-			continue;
+                else if ((ifa->ifa_flags & IFF_POINTOPOINT))
+                        continue;
 
                 /* Loopback and IPv6 interfaces go at the bottom on the list */
-                if (ifa->ifa_flags & IFF_LOOPBACK ||
+                if ((ifa->ifa_flags & IFF_LOOPBACK) ||
                     ifa->ifa_addr->sa_family == AF_INET6)
                         up_ifaces = g_list_append (up_ifaces, ifa);
                 else
                         up_ifaces = g_list_prepend (up_ifaces, ifa);
         }
 
-        for (iface = up_ifaces; iface != NULL; iface = iface->next) {
+        for (ifaceptr = up_ifaces;
+             ifaceptr != NULL;
+             ifaceptr = ifaceptr->next) {
                 char ip[INET6_ADDRSTRLEN];
-                const char *p;
-                struct sockaddr_in *s4;
-                struct sockaddr_in6 *s6;
+                char net[INET6_ADDRSTRLEN];
+                const char *p, *q;
+                struct sockaddr_in *s4, *s4_mask;
+                struct in_addr net_addr;
 
-                p = NULL;
+                ifa = ifaceptr->data;
 
-                ifa = iface->data;
-
-                switch (ifa->ifa_addr->sa_family) {
-                case AF_INET:
-                        s4 = (struct sockaddr_in *) ifa->ifa_addr;
-                        p = inet_ntop (AF_INET,
-                                       &s4->sin_addr, ip, sizeof (ip));
-                        break;
-                case AF_INET6:
-                        s6 = (struct sockaddr_in6 *) ifa->ifa_addr;
-                        p = inet_ntop (AF_INET6,
-                                       &s6->sin6_addr, ip, sizeof (ip));
-                        break;
-                default:
-                        continue; /* Unknown: ignore */
+                if (ifa->ifa_addr->sa_family != AF_INET) {
+                        continue;
                 }
 
-                if (p != NULL) {
-                        ret = g_strdup (p);
+                s4 = (struct sockaddr_in *) ifa->ifa_addr;
+                p = inet_ntop (AF_INET,
+                               &s4->sin_addr,
+                               ip,
+                               sizeof (ip));
+                device->host_ip = g_strdup (p);
+                s4_mask = (struct sockaddr_in *) ifa->ifa_netmask;
+                memcpy (&(device->mask), s4_mask, sizeof (struct sockaddr_in));
+                net_addr.s_addr = (in_addr_t) s4->sin_addr.s_addr &
+                                  (in_addr_t) s4_mask->sin_addr.s_addr;
+                q = inet_ntop (AF_INET, &net_addr, net, sizeof (net));
 
-                        if (*interface == NULL)
-                                *interface = g_strdup (ifa->ifa_name);
-                        break;
-                }
+                if (device->iface_name == NULL)
+                        device->iface_name = g_strdup (ifa->ifa_name);
+                if (device->network == NULL)
+                        device->network = g_strdup (q);
+                break;
         }
 
         g_list_free (up_ifaces);
         freeifaddrs (ifa_list);
 
-        return ret;
+        return TRUE;
+#endif
 }
 
 static gboolean
-init_network_info (GSSDPClient *client)
+init_network_info (GSSDPClient *client, GError **error)
 {
         gboolean ret = TRUE;
 
-        if (client->priv->interface == NULL || client->priv->host_ip == NULL)
-                client->priv->host_ip =
-                        get_host_ip (&client->priv->interface);
+        /* Either interface name or host_ip wasn't given during construction.
+         * If one is given, try to find the other, otherwise just pick an
+         * interface.
+         */
+        if (client->priv->device.iface_name == NULL ||
+            client->priv->device.host_ip == NULL)
+                get_host_ip (&(client->priv->device));
 
-        if (client->priv->interface == NULL) {
-                if (client->priv->error)
-                        g_set_error (client->priv->error,
+        if (client->priv->device.iface_name == NULL) {
+                g_set_error_literal (error,
                                      GSSDP_ERROR,
                                      GSSDP_ERROR_FAILED,
                                      "No default route?");
 
                 ret = FALSE;
-        } else if (client->priv->host_ip == NULL) {
-                if (client->priv->error)
-                        g_set_error (client->priv->error,
+        } else if (client->priv->device.host_ip == NULL) {
+                        g_set_error (error,
                                      GSSDP_ERROR,
                                      GSSDP_ERROR_NO_IP_ADDRESS,
                                      "Failed to find IP of interface %s",
-                                     client->priv->interface);
+                                     client->priv->device.iface_name);
 
                 ret = FALSE;
         }

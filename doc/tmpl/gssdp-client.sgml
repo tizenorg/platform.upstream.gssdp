@@ -9,10 +9,12 @@ GSSDPClient
 
 </para>
 
+
 <!-- ##### SECTION See_Also ##### -->
 <para>
 
 </para>
+
 
 <!-- ##### SECTION Stability_Level ##### -->
 
@@ -42,11 +44,6 @@ GSSDPClient
 
 </para>
 
-<!-- ##### ARG GSSDPClient:error ##### -->
-<para>
-
-</para>
-
 <!-- ##### ARG GSSDPClient:host-ip ##### -->
 <para>
 
@@ -62,7 +59,17 @@ GSSDPClient
 
 </para>
 
+<!-- ##### ARG GSSDPClient:network ##### -->
+<para>
+
+</para>
+
 <!-- ##### ARG GSSDPClient:server-id ##### -->
+<para>
+
+</para>
+
+<!-- ##### ARG GSSDPClient:socket-ttl ##### -->
 <para>
 
 </para>
@@ -73,7 +80,7 @@ GSSDPClient
 </para>
 
 @main_context: 
-@interface: 
+@iface: 
 @error: 
 @Returns: 
 
@@ -115,6 +122,24 @@ GSSDPClient
 
 
 <!-- ##### FUNCTION gssdp_client_get_host_ip ##### -->
+<para>
+
+</para>
+
+@client: 
+@Returns: 
+
+
+<!-- ##### FUNCTION gssdp_client_set_network ##### -->
+<para>
+
+</para>
+
+@client: 
+@network: 
+
+
+<!-- ##### FUNCTION gssdp_client_get_network ##### -->
 <para>
 
 </para>

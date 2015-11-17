@@ -15,8 +15,8 @@
  *
  * You should have received a copy of the GNU Library General Public
  * License along with this library; if not, write to the
- * Free Software Foundation, Inc., 59 Temple Place - Suite 330,
- * Boston, MA 02111-1307, USA.
+ * Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor,
+ * Boston, MA 02110-1301, USA.
  */
 
 #ifndef __GSSDP_CLIENT_H__
@@ -51,14 +51,16 @@ gssdp_client_get_type (void) G_GNUC_CONST;
                  GSSDPClientClass))
 
 typedef struct _GSSDPClientPrivate GSSDPClientPrivate;
+typedef struct _GSSDPClient GSSDPClient;
+typedef struct _GSSDPClientClass GSSDPClientClass;
 
-typedef struct {
+struct _GSSDPClient {
         GObject parent;
 
         GSSDPClientPrivate *priv;
-} GSSDPClient;
+};
 
-typedef struct {
+struct _GSSDPClientClass {
         GObjectClass parent_class;
 
         /* future padding */
@@ -66,15 +68,17 @@ typedef struct {
         void (* _gssdp_reserved2) (void);
         void (* _gssdp_reserved3) (void);
         void (* _gssdp_reserved4) (void);
-} GSSDPClientClass;
+};
 
 GSSDPClient *
 gssdp_client_new              (GMainContext *main_context,
-                               const char   *interface,
+                               const char   *iface,
                                GError      **error);
 
+#ifndef GSSDP_DISABLE_DEPRECATED
 GMainContext *
 gssdp_client_get_main_context (GSSDPClient  *client);
+#endif
 
 void
 gssdp_client_set_server_id    (GSSDPClient  *client,
@@ -88,6 +92,13 @@ gssdp_client_get_interface    (GSSDPClient  *client);
 
 const char *
 gssdp_client_get_host_ip      (GSSDPClient  *client);
+
+void
+gssdp_client_set_network      (GSSDPClient  *client,
+                               const char   *network);
+
+const char *
+gssdp_client_get_network      (GSSDPClient  *client);
 
 gboolean
 gssdp_client_get_active       (GSSDPClient  *client);

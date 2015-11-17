@@ -1,6 +1,12 @@
+<ONLINE href="http://developer.gnome.org/gssdp/stable/">
+<ANCHOR id="annotation-glossterm-allow-none" href="gssdp/annotation-glossary.html#annotation-glossterm-allow-none">
+<ANCHOR id="annotation-glossterm-element-type" href="gssdp/annotation-glossary.html#annotation-glossterm-element-type">
+<ANCHOR id="annotation-glossterm-type" href="gssdp/annotation-glossary.html#annotation-glossterm-type">
+<ANCHOR id="annotation-glossterm-transfer none" href="gssdp/annotation-glossary.html#annotation-glossterm-transfer none">
 <ANCHOR id="GSSDPClient" href="gssdp/GSSDPClient.html">
 <ANCHOR id="GSSDPClient.synopsis" href="gssdp/GSSDPClient.html#GSSDPClient.synopsis">
 <ANCHOR id="GSSDPClient.object-hierarchy" href="gssdp/GSSDPClient.html#GSSDPClient.object-hierarchy">
+<ANCHOR id="GSSDPClient.implemented-interfaces" href="gssdp/GSSDPClient.html#GSSDPClient.implemented-interfaces">
 <ANCHOR id="GSSDPClient.properties" href="gssdp/GSSDPClient.html#GSSDPClient.properties">
 <ANCHOR id="GSSDPClient.signals" href="gssdp/GSSDPClient.html#GSSDPClient.signals">
 <ANCHOR id="GSSDPClient.description" href="gssdp/GSSDPClient.html#GSSDPClient.description">
@@ -12,14 +18,17 @@
 <ANCHOR id="gssdp-client-get-server-id" href="gssdp/GSSDPClient.html#gssdp-client-get-server-id">
 <ANCHOR id="gssdp-client-get-interface" href="gssdp/GSSDPClient.html#gssdp-client-get-interface">
 <ANCHOR id="gssdp-client-get-host-ip" href="gssdp/GSSDPClient.html#gssdp-client-get-host-ip">
+<ANCHOR id="gssdp-client-set-network" href="gssdp/GSSDPClient.html#gssdp-client-set-network">
+<ANCHOR id="gssdp-client-get-network" href="gssdp/GSSDPClient.html#gssdp-client-get-network">
 <ANCHOR id="gssdp-client-get-active" href="gssdp/GSSDPClient.html#gssdp-client-get-active">
 <ANCHOR id="GSSDPClient.property-details" href="gssdp/GSSDPClient.html#GSSDPClient.property-details">
 <ANCHOR id="GSSDPClient--active" href="gssdp/GSSDPClient.html#GSSDPClient--active">
-<ANCHOR id="GSSDPClient--error" href="gssdp/GSSDPClient.html#GSSDPClient--error">
 <ANCHOR id="GSSDPClient--host-ip" href="gssdp/GSSDPClient.html#GSSDPClient--host-ip">
 <ANCHOR id="GSSDPClient--interface" href="gssdp/GSSDPClient.html#GSSDPClient--interface">
 <ANCHOR id="GSSDPClient--main-context" href="gssdp/GSSDPClient.html#GSSDPClient--main-context">
+<ANCHOR id="GSSDPClient--network" href="gssdp/GSSDPClient.html#GSSDPClient--network">
 <ANCHOR id="GSSDPClient--server-id" href="gssdp/GSSDPClient.html#GSSDPClient--server-id">
+<ANCHOR id="GSSDPClient--socket-ttl" href="gssdp/GSSDPClient.html#GSSDPClient--socket-ttl">
 <ANCHOR id="GSSDPClient.signal-details" href="gssdp/GSSDPClient.html#GSSDPClient.signal-details">
 <ANCHOR id="GSSDPClient-message-received" href="gssdp/GSSDPClient.html#GSSDPClient-message-received">
 <ANCHOR id="GSSDPResourceBrowser" href="gssdp/GSSDPResourceBrowser.html">
@@ -39,6 +48,7 @@
 <ANCHOR id="gssdp-resource-browser-get-mx" href="gssdp/GSSDPResourceBrowser.html#gssdp-resource-browser-get-mx">
 <ANCHOR id="gssdp-resource-browser-set-active" href="gssdp/GSSDPResourceBrowser.html#gssdp-resource-browser-set-active">
 <ANCHOR id="gssdp-resource-browser-get-active" href="gssdp/GSSDPResourceBrowser.html#gssdp-resource-browser-get-active">
+<ANCHOR id="gssdp-resource-browser-rescan" href="gssdp/GSSDPResourceBrowser.html#gssdp-resource-browser-rescan">
 <ANCHOR id="GSSDPResourceBrowser.property-details" href="gssdp/GSSDPResourceBrowser.html#GSSDPResourceBrowser.property-details">
 <ANCHOR id="GSSDPResourceBrowser--active" href="gssdp/GSSDPResourceBrowser.html#GSSDPResourceBrowser--active">
 <ANCHOR id="GSSDPResourceBrowser--client" href="gssdp/GSSDPResourceBrowser.html#GSSDPResourceBrowser--client">
@@ -76,3 +86,5 @@
 <ANCHOR id="gssdp-Error-codes.details" href="gssdp/gssdp-Error-codes.html#gssdp-Error-codes.details">
 <ANCHOR id="GSSDP-ERROR:CAPS" href="gssdp/gssdp-Error-codes.html#GSSDP-ERROR:CAPS">
 <ANCHOR id="GSSDPError" href="gssdp/gssdp-Error-codes.html#GSSDPError">
+<ANCHOR id="GSSDP-ERROR-NO-IP-ADDRESS:CAPS" href="gssdp/gssdp-Error-codes.html#GSSDP-ERROR-NO-IP-ADDRESS:CAPS">
+<ANCHOR id="GSSDP-ERROR-FAILED:CAPS" href="gssdp/gssdp-Error-codes.html#GSSDP-ERROR-FAILED:CAPS">

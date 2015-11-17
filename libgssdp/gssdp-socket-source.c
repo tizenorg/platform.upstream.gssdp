@@ -1,10 +1,12 @@
 /* 
  * Copyright (C) 2006, 2007, 2008 OpenedHand Ltd.
- * Copyright (C) 2009 Nokia Corporation, all rights reserved.
+ * Copyright (C) 2009 Nokia Corporation.
+ * Copyright (C) 2010 Jens Georg <mail@jensge.org>
  *
  * Author: Jorn Baayen <jorn@openedhand.com>
  *         Zeeshan Ali (Khattak) <zeeshanak@gnome.org>
  *                               <zeeshan.ali@nokia.com>
+ *         Jens Georg <mail@jensge.org>
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Library General Public
@@ -18,48 +20,105 @@
  *
  * You should have received a copy of the GNU Library General Public
  * License along with this library; if not, write to the
- * Free Software Foundation, Inc., 59 Temple Place - Suite 330,
- * Boston, MA 02111-1307, USA.
+ * Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor,
+ * Boston, MA 02110-1301, USA.
  */
 
 #include <config.h>
 #include <glib.h>
-#include <sys/socket.h>
-#include <sys/types.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <string.h>
-#include <stdio.h>
-#include <errno.h>
-#include <unistd.h>
 
+#include "gssdp-socket-functions.h"
 #include "gssdp-socket-source.h"
 #include "gssdp-protocol.h"
+#include "gssdp-error.h"
 
-struct _GSSDPSocketSource {
-        GSource source;
-
-        GPollFD poll_fd;
-};
-
-static gboolean
-gssdp_socket_source_prepare  (GSource    *source,
-                              int        *timeout);
-static gboolean
-gssdp_socket_source_check    (GSource    *source);
-static gboolean
-gssdp_socket_source_dispatch (GSource    *source,
-                              GSourceFunc callback,
-                              gpointer    user_data);
 static void
-gssdp_socket_source_finalize (GSource    *source);
+gssdp_socket_source_initable_init (gpointer g_iface,
+                                   gpointer iface_data);
 
-static const GSourceFuncs gssdp_socket_source_funcs = {
-        gssdp_socket_source_prepare,
-        gssdp_socket_source_check,
-        gssdp_socket_source_dispatch,
-        gssdp_socket_source_finalize
+G_DEFINE_TYPE_EXTENDED (GSSDPSocketSource,
+                        gssdp_socket_source,
+                        G_TYPE_OBJECT,
+                        0,
+                        G_IMPLEMENT_INTERFACE (G_TYPE_INITABLE,
+                                    gssdp_socket_source_initable_init));
+
+struct _GSSDPSocketSourcePrivate {
+        GSource              *source;
+        GSocket              *socket;
+        GSSDPSocketSourceType type;
+
+        char                 *host_ip;
+        guint                 ttl;
 };
+
+enum {
+    PROP_0,
+    PROP_TYPE,
+    PROP_HOST_IP,
+    PROP_TTL,
+};
+
+static void
+gssdp_socket_source_init (GSSDPSocketSource *self)
+{
+        self->priv = G_TYPE_INSTANCE_GET_PRIVATE (self,
+                                                  GSSDP_TYPE_SOCKET_SOURCE,
+                                                  GSSDPSocketSourcePrivate);
+}
+
+static gboolean
+gssdp_socket_source_do_init (GInitable     *initable,
+                             GCancellable  *cancellable,
+                             GError       **error);
+
+static void
+gssdp_socket_source_initable_init (gpointer               g_iface,
+                                   G_GNUC_UNUSED gpointer iface_data)
+{
+        GInitableIface *iface = (GInitableIface *)g_iface;
+        iface->init = gssdp_socket_source_do_init;
+}
+
+static void
+gssdp_socket_source_get_property (GObject              *object,
+                                  guint                 property_id,
+                                  G_GNUC_UNUSED GValue *value,
+                                  GParamSpec           *pspec)
+{
+        /* All properties are construct-only, write-only */
+        switch (property_id) {
+        default:
+                G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
+                break;
+        }
+}
+
+static void
+gssdp_socket_source_set_property (GObject          *object,
+                                  guint             property_id,
+                                  const GValue     *value,
+                                  GParamSpec       *pspec)
+{
+        GSSDPSocketSource *self;
+
+        self = GSSDP_SOCKET_SOURCE (object);
+
+        switch (property_id) {
+        case PROP_TYPE:
+                self->priv->type = g_value_get_int (value);
+                break;
+        case PROP_HOST_IP:
+                self->priv->host_ip = g_value_dup_string (value);
+                break;
+        case PROP_TTL:
+                self->priv->ttl = g_value_get_uint (value);
+                break;
+        default:
+                G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
+                break;
+        }
+}
 
 /**
  * gssdp_socket_source_new
@@ -68,208 +127,326 @@ static const GSourceFuncs gssdp_socket_source_funcs = {
  **/
 GSSDPSocketSource *
 gssdp_socket_source_new (GSSDPSocketSourceType type,
-                         const char           *host_ip)
+                         const char           *host_ip,
+                         guint                 ttl,
+                         GError              **error)
 {
-        GSource *source;
-        GSSDPSocketSource *socket_source;
-        struct sockaddr_in bind_addr;
-        struct in_addr iface_addr;
-        struct ip_mreq mreq;
-        gboolean boolean = TRUE;
-        guchar ttl = 4;
-        int res;
+        return g_initable_new (GSSDP_TYPE_SOCKET_SOURCE,
+                               NULL,
+                               error,
+                               "type",
+                               type,
+                               "host-ip",
+                               host_ip,
+                               "ttl",
+                               ttl,
+                               NULL);
+}
 
-        /* Create source */
-        source = g_source_new ((GSourceFuncs*)&gssdp_socket_source_funcs,
-                               sizeof (GSSDPSocketSource));
+static gboolean
+gssdp_socket_source_do_init (GInitable                   *initable,
+                             G_GNUC_UNUSED GCancellable  *cancellable,
+                             GError                     **error)
+{
+        GSSDPSocketSource *self = NULL;
+        GInetAddress *iface_address = NULL;
+        GSocketAddress *bind_address = NULL;
+        GInetAddress *group = NULL;
+        GError *inner_error = NULL;
+        GSocketFamily family;
+        gboolean success = FALSE;
 
-        socket_source = (GSSDPSocketSource *) source;
+        self = GSSDP_SOCKET_SOURCE (initable);
+        iface_address = g_inet_address_new_from_string (self->priv->host_ip);
+        if (iface_address == NULL) {
+                g_set_error (error,
+                             GSSDP_ERROR,
+                             GSSDP_ERROR_FAILED,
+                             "Invalid host ip: %s",
+                             self->priv->host_ip);
+
+                goto error;
+        }
+
+        family = g_inet_address_get_family (iface_address);
+
+        if (family == G_SOCKET_FAMILY_IPV4)
+                group = g_inet_address_new_from_string (SSDP_ADDR);
+        else {
+                g_set_error_literal (error,
+                                     GSSDP_ERROR,
+                                     GSSDP_ERROR_FAILED,
+                                     "IPv6 address");
+
+                goto error;
+        }
+
 
         /* Create socket */
-        socket_source->poll_fd.fd = socket (AF_INET,
-                                            SOCK_DGRAM,
-                                            IPPROTO_UDP);
-        if (socket_source->poll_fd.fd == -1)
-                goto error;
-        
-        socket_source->poll_fd.events = G_IO_IN | G_IO_ERR;
+        self->priv->socket = g_socket_new (G_SOCKET_FAMILY_IPV4,
+                                           G_SOCKET_TYPE_DATAGRAM,
+                                           G_SOCKET_PROTOCOL_UDP,
+                                           &inner_error);
 
-        g_source_add_poll (source, &socket_source->poll_fd);
+        if (!self->priv->socket) {
+                g_propagate_prefixed_error (error,
+                                            inner_error,
+                                            "Could not create socket");
+
+                goto error;
+        }
 
         /* Enable broadcasting */
-        res = setsockopt (socket_source->poll_fd.fd, 
-                          SOL_SOCKET,
-                          SO_BROADCAST,
-                          &boolean,
-                          sizeof (boolean));
-        if (res == -1)
+        if (!gssdp_socket_enable_broadcast (self->priv->socket,
+                                            TRUE,
+                                            &inner_error)) {
+                g_propagate_prefixed_error (error,
+                                            inner_error,
+                                            "Failed to enable broadcast");
                 goto error;
+        }
 
         /* TTL */
-        res = setsockopt (socket_source->poll_fd.fd,
-                          IPPROTO_IP,
-                          IP_MULTICAST_TTL,
-                          &ttl,
-                          sizeof (ttl));
-        if (res == -1)
-                goto error;
+        if (!self->priv->ttl)
+                /* UDA/1.0 says 4, UDA/1.1 says 2 */
+                self->priv->ttl = 4;
 
-        memset (&bind_addr, 0, sizeof (bind_addr));
-        bind_addr.sin_family = AF_INET;
+        if (!gssdp_socket_set_ttl (self->priv->socket,
+                                   self->priv->ttl,
+                                   &inner_error)) {
+                g_propagate_prefixed_error (error,
+                                            inner_error,
+                                            "Failed to set TTL to %u", self->priv->ttl);
 
-        res = inet_aton (host_ip, &iface_addr);
-        if (res == 0)
                 goto error;
+        }
 
         /* Set up additional things according to the type of socket desired */
-        if (type == GSSDP_SOCKET_SOURCE_TYPE_MULTICAST) {
-                /* Allow multiple sockets to use the same PORT number */
-                res = setsockopt (socket_source->poll_fd.fd,
-                                  SOL_SOCKET,
-#ifdef SO_REUSEPORT 
-                                  SO_REUSEPORT,
-#else
-                                  SO_REUSEADDR,
-#endif
-                                  &boolean,
-                                  sizeof (boolean));
-                if (res == -1)
-                        goto error;
-
+        if (self->priv->type == GSSDP_SOCKET_SOURCE_TYPE_MULTICAST) {
                 /* Enable multicast loopback */
-                res = setsockopt (socket_source->poll_fd.fd,
-                                  IPPROTO_IP,
-                                  IP_MULTICAST_LOOP,
-                                  &boolean,
-                                  sizeof (boolean));
-                if (res == -1)
-                       goto error;
+                if (!gssdp_socket_enable_loop (self->priv->socket,
+                                               TRUE,
+                                               &inner_error)) {
+                        g_propagate_prefixed_error (
+                                        error,
+                                        inner_error,
+                                        "Failed to enable loop-back");
 
-                /* Set the interface */
-                res = setsockopt (socket_source->poll_fd.fd,
-                                  IPPROTO_IP,
-                                  IP_MULTICAST_IF,
-                                  &iface_addr,
-                                  sizeof (struct in_addr));
-                if (res == -1)
                         goto error;
+                }
 
-                /* Subscribe to multicast channel */
-                res = inet_aton (SSDP_ADDR, &(mreq.imr_multiaddr));
-                if (res == 0)
+                if (!gssdp_socket_mcast_interface_set (self->priv->socket,
+                                                       iface_address,
+                                                       &inner_error)) {
+                        g_propagate_prefixed_error (
+                                        error,
+                                        inner_error,
+                                        "Failed to set multicast interface");
+
                         goto error;
+                }
 
-                memcpy (&(mreq.imr_interface),
-                        &iface_addr,
-                        sizeof (struct in_addr));
-
-                res = setsockopt (socket_source->poll_fd.fd,
-                                  IPPROTO_IP,
-                                  IP_ADD_MEMBERSHIP,
-                                  &mreq,
-                                  sizeof (mreq));
-                if (res == -1)
-                        goto error;
-
-                bind_addr.sin_port = htons (SSDP_PORT);
-                res = inet_aton (SSDP_ADDR, &(bind_addr.sin_addr));
-                if (res == 0)
-                        goto error;
+#ifdef G_OS_WIN32
+                bind_address = g_inet_socket_address_new (iface_address,
+                                                          SSDP_PORT);
+#else
+                bind_address = g_inet_socket_address_new (group,
+                                                          SSDP_PORT);
+#endif
         } else {
-                bind_addr.sin_port = 0;
-                memcpy (&(bind_addr.sin_addr),
-                        &iface_addr,
-                        sizeof (struct in_addr));
+                guint port = SSDP_PORT;
+
+                /* Chose random port For the socket source used by M-SEARCH */
+                if (self->priv->type == GSSDP_SOCKET_SOURCE_TYPE_SEARCH)
+                        port = 0;
+                bind_address = g_inet_socket_address_new (iface_address,
+                                                          port);
+        }
+
+        /* Normally g_socket_bind does this, but it is disabled on
+         * windows since SO_REUSEADDR has different semantics
+         * there, also we nees SO_REUSEPORT on OpenBSD. This is a nop
+         * everywhere else.
+         */
+        if (!gssdp_socket_reuse_address (self->priv->socket,
+                                         TRUE,
+                                         &inner_error)) {
+                g_propagate_prefixed_error (
+                                error,
+                                inner_error,
+                                "Failed to enable reuse");
+
+                goto error;
         }
 
         /* Bind to requested port and address */
-        res = bind (socket_source->poll_fd.fd,
-                    (struct sockaddr *) &bind_addr,
-                    sizeof (bind_addr));
-        if (res == -1)
+        if (!g_socket_bind (self->priv->socket,
+                            bind_address,
+                            TRUE,
+                            &inner_error)) {
+                g_propagate_prefixed_error (error,
+                                            inner_error,
+                                            "Failed to bind socket");
+
                 goto error;
-
-        return socket_source;
-
-error:
-        g_source_destroy (source);
-        
-        return NULL;
-}
-
-static gboolean
-gssdp_socket_source_prepare (GSource *source,
-                             int     *timeout)
-{
-        return FALSE;
-}
-
-static gboolean
-gssdp_socket_source_check (GSource *source)
-{
-        GSSDPSocketSource *socket_source;
-
-        socket_source = (GSSDPSocketSource *) source;
-
-        return socket_source->poll_fd.revents & (G_IO_IN | G_IO_ERR);
-}
-
-static gboolean
-gssdp_socket_source_dispatch (GSource    *source,
-                              GSourceFunc callback,
-                              gpointer    user_data)
-{
-        GSSDPSocketSource *socket_source;
-
-        socket_source = (GSSDPSocketSource *) source;
-
-        if (socket_source->poll_fd.revents & G_IO_IN) {
-                /* Ready to read */
-                if (callback)
-                        callback (user_data);
-        } else if (socket_source->poll_fd.revents & G_IO_ERR) {
-                /* Error */
-                int value;
-                socklen_t size_int;
-
-                value = EINVAL;
-                size_int = sizeof (int);
-                
-                /* Get errno from socket */
-                getsockopt (socket_source->poll_fd.fd,
-                            SOL_SOCKET,
-                            SO_ERROR,
-                            &value,
-                            &size_int);
-
-                g_warning ("Socket error %d received: %s",
-                           value,
-                           strerror (value));
         }
 
-        return TRUE;
+        if (self->priv->type == GSSDP_SOCKET_SOURCE_TYPE_MULTICAST) {
+
+                 /* Subscribe to multicast channel */
+                if (!gssdp_socket_mcast_group_join (self->priv->socket,
+                                                    group,
+                                                    iface_address,
+                                                    &inner_error)) {
+                        char *address = g_inet_address_to_string (group);
+                        g_propagate_prefixed_error (error,
+                                                    inner_error,
+                                                    "Failed to join group %s",
+                                                    address);
+                        g_free (address);
+
+                        goto error;
+                }
+        }
+
+        self->priv->source = g_socket_create_source (self->priv->socket,
+                                                     G_IO_IN | G_IO_ERR,
+                                                     NULL);
+        success = TRUE;
+
+error:
+        if (iface_address != NULL)
+                g_object_unref (iface_address);
+        if (bind_address != NULL)
+                g_object_unref (bind_address);
+        if (group != NULL)
+                g_object_unref (group);
+        if (!success)
+                /* Be aware that inner_error has already been free'd by
+                 * g_propagate_error(), so we cannot access its contents
+                 * anymore. */
+                if (error == NULL)
+                        g_warning ("Failed to create socket source");
+
+        return success;
+}
+
+GSocket *
+gssdp_socket_source_get_socket (GSSDPSocketSource *socket_source)
+{
+        g_return_val_if_fail (socket_source != NULL, NULL);
+
+        return socket_source->priv->socket;
+}
+
+void
+gssdp_socket_source_set_callback (GSSDPSocketSource *self,
+                                  GSourceFunc        callback,
+                                  gpointer           user_data)
+{
+        g_return_if_fail (self != NULL);
+        g_return_if_fail (GSSDP_IS_SOCKET_SOURCE (self));
+
+        g_source_set_callback (self->priv->source, callback, user_data, NULL);
+}
+
+void
+gssdp_socket_source_attach (GSSDPSocketSource *self)
+{
+        g_return_if_fail (self != NULL);
+        g_return_if_fail (GSSDP_IS_SOCKET_SOURCE (self));
+
+        g_source_attach (self->priv->source,
+                         g_main_context_get_thread_default ());
 }
 
 static void
-gssdp_socket_source_finalize (GSource *source)
+gssdp_socket_source_dispose (GObject *object)
 {
-        GSSDPSocketSource *socket_source;
+        GSSDPSocketSource *self;
 
-        socket_source = (GSSDPSocketSource *) source;
-        
-        /* Close the socket */
-        close (socket_source->poll_fd.fd);
+        self = GSSDP_SOCKET_SOURCE (object);
+
+        if (self->priv->source != NULL) {
+                g_source_unref (self->priv->source);
+                g_source_destroy (self->priv->source);
+                self->priv->source = NULL;
+        }
+
+        if (self->priv->socket != NULL) {
+                g_socket_close (self->priv->socket, NULL);
+                g_object_unref (self->priv->socket);
+                self->priv->socket = NULL;
+        }
+
+        G_OBJECT_CLASS (gssdp_socket_source_parent_class)->dispose (object);
 }
 
-/**
- * gssdp_socket_source_get_fd
- *
- * Return value: The socket's FD.
- **/
-int
-gssdp_socket_source_get_fd (GSSDPSocketSource *socket_source)
+static void
+gssdp_socket_source_finalize (GObject *object)
 {
-        g_return_val_if_fail (socket_source != NULL, -1);
-        
-        return socket_source->poll_fd.fd;
+        GSSDPSocketSource *self;
+
+        self = GSSDP_SOCKET_SOURCE (object);
+
+        if (self->priv->host_ip != NULL) {
+                g_free (self->priv->host_ip);
+                self->priv->host_ip = NULL;
+        }
+
+        G_OBJECT_CLASS (gssdp_socket_source_parent_class)->finalize (object);
+}
+
+static void
+gssdp_socket_source_class_init (GSSDPSocketSourceClass *klass)
+{
+        GObjectClass *object_class;
+
+        object_class = G_OBJECT_CLASS (klass);
+
+        object_class->get_property = gssdp_socket_source_get_property;
+        object_class->set_property = gssdp_socket_source_set_property;
+        object_class->dispose = gssdp_socket_source_dispose;
+        object_class->finalize = gssdp_socket_source_finalize;
+
+        g_type_class_add_private (klass, sizeof (GSSDPSocketSourcePrivate));
+
+        g_object_class_install_property
+                (object_class,
+                 PROP_TYPE,
+                 g_param_spec_int
+                        ("type",
+                         "Type",
+                         "Type of socket-source (Multicast/Unicast)",
+                         GSSDP_SOCKET_SOURCE_TYPE_REQUEST,
+                         GSSDP_SOCKET_SOURCE_TYPE_SEARCH,
+                         GSSDP_SOCKET_SOURCE_TYPE_REQUEST,
+                         G_PARAM_WRITABLE | G_PARAM_CONSTRUCT_ONLY |
+                         G_PARAM_STATIC_NAME | G_PARAM_STATIC_NICK |
+                         G_PARAM_STATIC_BLURB));
+
+        g_object_class_install_property
+                (object_class,
+                 PROP_HOST_IP,
+                 g_param_spec_string
+                        ("host-ip",
+                         "Host ip",
+                         "IP address of associated network interface",
+                         NULL,
+                         G_PARAM_WRITABLE | G_PARAM_CONSTRUCT_ONLY |
+                         G_PARAM_STATIC_NAME | G_PARAM_STATIC_NICK |
+                         G_PARAM_STATIC_BLURB));
+
+        g_object_class_install_property
+                (object_class,
+                 PROP_TTL,
+                 g_param_spec_uint
+                        ("ttl",
+                         "TTL",
+                         "Time To Live for the socket",
+                         0, 255,
+                         0,
+                         G_PARAM_WRITABLE | G_PARAM_CONSTRUCT_ONLY |
+                         G_PARAM_STATIC_NAME | G_PARAM_STATIC_NICK |
+                         G_PARAM_STATIC_BLURB));
 }

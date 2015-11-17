@@ -15,17 +15,18 @@
  *
  * You should have received a copy of the GNU Library General Public
  * License along with this library; if not, write to the
- * Free Software Foundation, Inc., 59 Temple Place - Suite 330,
- * Boston, MA 02111-1307, USA.
+ * Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor,
+ * Boston, MA 02110-1301, USA.
  */
 
 #include <libgssdp/gssdp.h>
+#include <gio/gio.h>
 #include <stdlib.h>
 
 static void
-resource_available_cb (GSSDPResourceBrowser *resource_browser,
-                       const char           *usn,
-                       GList                *locations)
+resource_available_cb (G_GNUC_UNUSED GSSDPResourceBrowser *resource_browser,
+                       const char                         *usn,
+                       GList                              *locations)
 {
         GList *l;
 
@@ -38,8 +39,8 @@ resource_available_cb (GSSDPResourceBrowser *resource_browser,
 }
 
 static void
-resource_unavailable_cb (GSSDPResourceBrowser *resource_browser,
-                         const char           *usn)
+resource_unavailable_cb (G_GNUC_UNUSED GSSDPResourceBrowser *resource_browser,
+                         const char                         *usn)
 {
         g_print ("resource unavailable\n"
                  "  USN:      %s\n",
@@ -47,18 +48,23 @@ resource_unavailable_cb (GSSDPResourceBrowser *resource_browser,
 }
 
 int
-main (int    argc,
-      char **argv)
+main (G_GNUC_UNUSED int    argc,
+      G_GNUC_UNUSED char **argv)
 {
         GSSDPClient *client;
         GSSDPResourceBrowser *resource_browser;
         GError *error;
         GMainLoop *main_loop;
 
+#if !GLIB_CHECK_VERSION (2, 35, 0)
         g_type_init ();
+#endif
 
         error = NULL;
-        client = gssdp_client_new (NULL, NULL, &error);
+        client = g_initable_new (GSSDP_TYPE_CLIENT,
+                                 NULL,
+                                 &error,
+                                 NULL);
         if (error) {
                 g_printerr ("Error creating the GSSDP client: %s\n",
                             error->message);

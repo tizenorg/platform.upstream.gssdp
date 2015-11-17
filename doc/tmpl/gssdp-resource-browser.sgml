@@ -9,10 +9,12 @@ GSSDPResourceBrowser
 
 </para>
 
+
 <!-- ##### SECTION See_Also ##### -->
 <para>
 
 </para>
+
 
 <!-- ##### SECTION Stability_Level ##### -->
 
@@ -135,6 +137,15 @@ GSSDPResourceBrowser
 
 
 <!-- ##### FUNCTION gssdp_resource_browser_get_active ##### -->
+<para>
+
+</para>
+
+@resource_browser: 
+@Returns: 
+
+
+<!-- ##### FUNCTION gssdp_resource_browser_rescan ##### -->
 <para>
 
 </para>

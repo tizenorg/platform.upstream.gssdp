@@ -15,8 +15,8 @@
  *
  * You should have received a copy of the GNU Library General Public
  * License along with this library; if not, write to the
- * Free Software Foundation, Inc., 59 Temple Place - Suite 330,
- * Boston, MA 02111-1307, USA.
+ * Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor,
+ * Boston, MA 02110-1301, USA.
  */
 
 #ifndef __GSSDP_CLIENT_PRIVATE_H__
@@ -33,10 +33,11 @@ typedef enum {
 } _GSSDPMessageType;
 
 G_GNUC_INTERNAL void
-_gssdp_client_send_message (GSSDPClient *client,
-                            const char  *dest_ip,
-                            gushort      dest_port,
-                            const char  *message);
+_gssdp_client_send_message (GSSDPClient       *client,
+                            const char        *dest_ip,
+                            gushort            dest_port,
+                            const char        *message,
+                            _GSSDPMessageType  type);
 
 G_END_DECLS
 

@@ -15,8 +15,8 @@
  *
  * You should have received a copy of the GNU Library General Public
  * License along with this library; if not, write to the
- * Free Software Foundation, Inc., 59 Temple Place - Suite 330,
- * Boston, MA 02111-1307, USA.
+ * Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor,
+ * Boston, MA 02110-1301, USA.
  */
 
 #ifndef __GSSDP_RESOURCE_BROWSER_H__
@@ -51,14 +51,16 @@ gssdp_resource_browser_get_type (void) G_GNUC_CONST;
                  GSSDPResourceBrowserClass))
 
 typedef struct _GSSDPResourceBrowserPrivate GSSDPResourceBrowserPrivate;
+typedef struct _GSSDPResourceBrowser GSSDPResourceBrowser;
+typedef struct _GSSDPResourceBrowserClass GSSDPResourceBrowserClass;
 
-typedef struct {
+struct _GSSDPResourceBrowser {
         GObject parent;
 
         GSSDPResourceBrowserPrivate *priv;
-} GSSDPResourceBrowser;
+};
 
-typedef struct {
+struct _GSSDPResourceBrowserClass {
         GObjectClass parent_class;
 
         /* signals */
@@ -74,10 +76,10 @@ typedef struct {
         void (* _gssdp_reserved2) (void);
         void (* _gssdp_reserved3) (void);
         void (* _gssdp_reserved4) (void);
-} GSSDPResourceBrowserClass;
+};
 
 /**
- * GSSDP_ALL_RESOURCES
+ * GSSDP_ALL_RESOURCES:
  *
  * SSDP search target for finding all possible resources.
  **/
@@ -110,6 +112,9 @@ gssdp_resource_browser_set_active (GSSDPResourceBrowser *resource_browser,
 
 gboolean
 gssdp_resource_browser_get_active (GSSDPResourceBrowser *resource_browser);
+
+gboolean
+gssdp_resource_browser_rescan     (GSSDPResourceBrowser *resource_browser);
 
 G_END_DECLS
 

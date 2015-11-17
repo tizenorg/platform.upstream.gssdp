@@ -13,8 +13,8 @@
  *
  * You should have received a copy of the GNU Library General Public
  * License along with this library; if not, write to the
- * Free Software Foundation, Inc., 59 Temple Place - Suite 330,
- * Boston, MA 02111-1307, USA.
+ * Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor,
+ * Boston, MA 02110-1301, USA.
  */
 
 #include <libgssdp/gssdp.h>
@@ -27,15 +27,24 @@
 #define UI_FILE "gssdp-device-sniffer.ui"
 #define MAX_IP_LEN 16
 
+static char *interface = NULL;
+
 GtkBuilder *builder;
 GSSDPResourceBrowser *resource_browser;
 GSSDPClient *client;
 char *ip_filter = NULL;
 gboolean capture_packets = TRUE;
 
+GOptionEntry entries[] =
+{
+        {"interface", 'i', 0, G_OPTION_ARG_STRING, &interface, "Network interface to listen on", NULL },
+        { NULL }
+};
+
 G_MODULE_EXPORT
 void
-on_enable_packet_capture_activate (GtkCheckMenuItem *menuitem, gpointer user_data)
+on_enable_packet_capture_activate (GtkCheckMenuItem      *menuitem,
+                                   G_GNUC_UNUSED gpointer user_data)
 {
         capture_packets = gtk_check_menu_item_get_active (menuitem);
 }
@@ -125,7 +134,8 @@ display_packet (time_t arrival_time, SoupMessageHeaders *packet_headers)
 }
 
 static void
-on_packet_selected (GtkTreeSelection *selection, gpointer user_data)
+on_packet_selected (GtkTreeSelection      *selection,
+                    G_GNUC_UNUSED gpointer user_data)
 {
         GtkTreeModel *model;
         GtkTreeIter iter;
@@ -148,7 +158,8 @@ on_packet_selected (GtkTreeSelection *selection, gpointer user_data)
 
 G_MODULE_EXPORT
 void
-on_clear_packet_capture_activate (GtkMenuItem *menuitem, gpointer user_data)
+on_clear_packet_capture_activate (G_GNUC_UNUSED GtkMenuItem *menuitem,
+                                  G_GNUC_UNUSED gpointer     user_data)
 {
         clear_packet_treeview ();
 }
@@ -156,10 +167,10 @@ on_clear_packet_capture_activate (GtkMenuItem *menuitem, gpointer user_data)
 static char *message_types[] = {"M-SEARCH", "RESPONSE", "NOTIFY"};
 
 static char **
-packet_to_treeview_data (const gchar *from_ip,
-                time_t arrival_time,
-                _GSSDPMessageType type,
-                SoupMessageHeaders *headers)
+packet_to_treeview_data (const gchar        *from_ip,
+                         time_t              arrival_time,
+                         _GSSDPMessageType   type,
+                         SoupMessageHeaders *headers)
 {
         char **packet_data;
         const char *target;
@@ -179,9 +190,9 @@ packet_to_treeview_data (const gchar *from_ip,
         
         /* Now the Packet Information */
         if (type == _GSSDP_DISCOVERY_RESPONSE)
-                target = soup_message_headers_get (headers, "ST");
+                target = soup_message_headers_get_one (headers, "ST");
         else
-                target = soup_message_headers_get (headers, "NT");
+                target = soup_message_headers_get_one (headers, "NT");
         
         packet_data[3] = g_strdup (target);
         packet_data[4] = NULL;
@@ -222,12 +233,12 @@ append_packet (const gchar *from_ip,
 }
 
 static void
-on_ssdp_message (GSSDPClient *client,
-                const gchar *from_ip,
-                gushort from_port,
-                _GSSDPMessageType type,
-                SoupMessageHeaders *headers,
-                gpointer user_data)
+on_ssdp_message (G_GNUC_UNUSED GSSDPClient *client,
+                 G_GNUC_UNUSED const gchar *from_ip,
+                 G_GNUC_UNUSED gushort      from_port,
+                 _GSSDPMessageType          type,
+                 SoupMessageHeaders        *headers,
+                 G_GNUC_UNUSED gpointer     user_data)
 {
         time_t arrival_time;
         
@@ -297,9 +308,9 @@ append_device (const char *uuid,
 }
 
 static void
-resource_available_cb (GSSDPResourceBrowser *resource_browser,
-                       const char           *usn,
-                       GList                *locations)
+resource_available_cb (G_GNUC_UNUSED GSSDPResourceBrowser *resource_browser,
+                       const char                         *usn,
+                       GList                              *locations)
 {
 
         char **usn_tokens;
@@ -359,8 +370,8 @@ remove_device (const char *uuid)
 }
 
 static void
-resource_unavailable_cb (GSSDPResourceBrowser *resource_browser,
-                         const char           *usn)
+resource_unavailable_cb (G_GNUC_UNUSED GSSDPResourceBrowser *resource_browser,
+                         const char                         *usn)
 {
         char **usn_tokens;
         char *uuid;
@@ -376,8 +387,8 @@ resource_unavailable_cb (GSSDPResourceBrowser *resource_browser,
 
 G_MODULE_EXPORT
 void
-on_use_filter_radiobutton_toggled (GtkToggleButton *togglebutton,
-                gpointer         user_data)
+on_use_filter_radiobutton_toggled (GtkToggleButton       *togglebutton,
+                                   G_GNUC_UNUSED gpointer user_data)
 {
         GtkWidget *filter_hbox;
         gboolean use_filter;
@@ -416,9 +427,9 @@ get_ip_filter ()
 
 G_MODULE_EXPORT
 void
-on_address_filter_dialog_response (GtkDialog *dialog,
-                gint       response,
-                gpointer   user_data)
+on_address_filter_dialog_response (GtkDialog             *dialog,
+                                   G_GNUC_UNUSED gint     response,
+                                   G_GNUC_UNUSED gpointer user_data)
 {
         GtkWidget *use_filter_radio;
 
@@ -536,11 +547,12 @@ setup_treeviews ()
 
 G_MODULE_EXPORT
 gboolean
-on_delete_event (GtkWidget *widget,
-                GdkEvent  *event,
-                gpointer   user_data)
+on_delete_event (G_GNUC_UNUSED GtkWidget *widget,
+                 G_GNUC_UNUSED GdkEvent  *event,
+                 G_GNUC_UNUSED gpointer   user_data)
 {
         gtk_main_quit ();
+
         return TRUE;
 }
 
@@ -550,8 +562,18 @@ init_ui (gint *argc, gchar **argv[])
         GtkWidget *main_window;
         gint window_width, window_height;
         gchar *ui_path = NULL;
-        
-        gtk_init (argc, argv);
+        GError *error = NULL;
+        GOptionContext *context;
+
+        context = g_option_context_new ("- graphical SSDP debug tool");
+        g_option_context_add_main_entries (context, entries, NULL);
+        g_option_context_add_group (context, gtk_get_option_group (TRUE));
+        if (!g_option_context_parse (context, argc, argv, &error)) {
+                g_print ("Failed to parse options: %s\n", error->message);
+                g_error_free (error);
+
+                return FALSE;
+        }
 
         /* Try to fetch the ui file from the CWD first */
         ui_path = UI_FILE;
@@ -601,7 +623,11 @@ init_upnp (void)
         GError *error;
         
         error = NULL;
-        client = gssdp_client_new (NULL, NULL, &error);
+        client = g_initable_new (GSSDP_TYPE_CLIENT,
+                                 NULL,
+                                 &error,
+                                 "interface", interface,
+                                 NULL);
         if (error) {
                 g_printerr ("Error creating the GSSDP client: %s\n",
                             error->message);

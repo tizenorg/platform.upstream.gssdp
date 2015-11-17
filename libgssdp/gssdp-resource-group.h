@@ -15,8 +15,8 @@
  *
  * You should have received a copy of the GNU Library General Public
  * License along with this library; if not, write to the
- * Free Software Foundation, Inc., 59 Temple Place - Suite 330,
- * Boston, MA 02111-1307, USA.
+ * Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor,
+ * Boston, MA 02110-1301, USA.
  */
 
 #ifndef __GSSDP_RESOURCE_GROUP_H__
@@ -51,14 +51,16 @@ gssdp_resource_group_get_type (void) G_GNUC_CONST;
                  GSSDPResourceGroupClass))
 
 typedef struct _GSSDPResourceGroupPrivate GSSDPResourceGroupPrivate;
+typedef struct _GSSDPResourceGroup GSSDPResourceGroup;
+typedef struct _GSSDPResourceGroupClass GSSDPResourceGroupClass;
 
-typedef struct {
+struct _GSSDPResourceGroup {
         GObject parent;
 
         GSSDPResourceGroupPrivate *priv;
-} GSSDPResourceGroup;
+};
 
-typedef struct {
+struct _GSSDPResourceGroupClass {
         GObjectClass parent_class;
 
         /* future padding */
@@ -66,7 +68,7 @@ typedef struct {
         void (* _gssdp_reserved2) (void);
         void (* _gssdp_reserved3) (void);
         void (* _gssdp_reserved4) (void);
-} GSSDPResourceGroupClass;
+};
 
 GSSDPResourceGroup *
 gssdp_resource_group_new                 (GSSDPClient        *client);
