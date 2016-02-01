@@ -27,7 +27,7 @@ implements resource discovery and announcement over SSDP.
 %package devel
 Summary:    Development package for gssdp
 Group:      Development/Libraries
-LICENSE:    LGPL-2.0+LICENSE:    LGPL-2.0+
+LICENSE:    LGPL-2.0+
 Requires:   %{name} = %{version}-%{release}
 
 %description devel
@@ -66,6 +66,6 @@ rm -rf %{buildroot}
 %defattr(-,root,root,-)
 /usr/include/gssdp-1.0/*
 #%{_libdir}/*.a
-%{_libdir}/*.so*
+%{_libdir}/*.so
 %{_libdir}/pkgconfig/*
 
