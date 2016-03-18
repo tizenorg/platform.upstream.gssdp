@@ -8,7 +8,6 @@ URL:        http://www.gupnp.org
 Source0:    http://download.gnome.org/sources/%{name}/0.14/%{name}-%{version}.tar.bz2
 Requires:   dbus
 Requires:   libsoup
-BuildRequires:  pkgconfig(dbus-glib-1)
 BuildRequires:  pkgconfig(glib-2.0)
 BuildRequires:  pkgconfig(libxml-2.0)
 #BuildRequires:  pkgconfig(gconf-2.0)
