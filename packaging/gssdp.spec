@@ -37,8 +37,10 @@ Development files for gssdp.
 %setup -q -n %{name}-%{version}
 
 %build
+export CFLAGS+=" -flto "
+export CXXFLAGS+=" -flto "
 %configure --prefix=/usr --enable-introspection=no --enable-gtk-doc-html=no
- 
+
 make %{?jobs:-j%jobs}
 
 %install
@@ -68,4 +70,3 @@ rm -rf %{buildroot}
 #%{_libdir}/*.a
 %{_libdir}/*.so
 %{_libdir}/pkgconfig/*
-
