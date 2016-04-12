@@ -37,8 +37,8 @@ Development files for gssdp.
 %setup -q -n %{name}-%{version}
 
 %build
-export CFLAGS+=" -flto "
-export CXXFLAGS+=" -flto "
+export CFLAGS+=" -flto -fvisibility=hidden -DEXPORT_API=\"__attribute__((visibility(\\\"default\\\")))\" "
+export CXXFLAGS+=" -flto -fvisibility=hidden -DEXPORT_API=\"__attribute__((visibility(\\\"default\\\")))\" "
 %configure --prefix=/usr --enable-introspection=no --enable-gtk-doc-html=no
 
 make %{?jobs:-j%jobs}

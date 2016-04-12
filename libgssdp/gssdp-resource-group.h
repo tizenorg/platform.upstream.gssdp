@@ -1,4 +1,4 @@
-/* 
+/*
  * Copyright (C) 2006, 2007 OpenedHand Ltd.
  *
  * Author: Jorn Baayen <jorn@openedhand.com>
@@ -26,7 +26,7 @@
 
 G_BEGIN_DECLS
 
-GType
+EXPORT_API GType
 gssdp_resource_group_get_type (void) G_GNUC_CONST;
 
 #define GSSDP_TYPE_RESOURCE_GROUP \
@@ -50,6 +50,11 @@ gssdp_resource_group_get_type (void) G_GNUC_CONST;
                  GSSDP_TYPE_RESOURCE_GROUP, \
                  GSSDPResourceGroupClass))
 
+                 #ifndef EXPORT_API
+                 #define EXPORT_API
+                 #endif // EXPORT_API
+
+
 typedef struct _GSSDPResourceGroupPrivate GSSDPResourceGroupPrivate;
 typedef struct _GSSDPResourceGroup GSSDPResourceGroup;
 typedef struct _GSSDPResourceGroupClass GSSDPResourceGroupClass;
@@ -70,46 +75,46 @@ struct _GSSDPResourceGroupClass {
         void (* _gssdp_reserved4) (void);
 };
 
-GSSDPResourceGroup *
+EXPORT_API GSSDPResourceGroup *
 gssdp_resource_group_new                 (GSSDPClient        *client);
 
-GSSDPClient *
+EXPORT_API GSSDPClient *
 gssdp_resource_group_get_client          (GSSDPResourceGroup *resource_group);
 
-void
+EXPORT_API void
 gssdp_resource_group_set_max_age         (GSSDPResourceGroup *resource_group,
                                           guint               max_age);
 
-guint
+EXPORT_API guint
 gssdp_resource_group_get_max_age         (GSSDPResourceGroup *resource_group);
 
-void
+EXPORT_API void
 gssdp_resource_group_set_available       (GSSDPResourceGroup *resource_group,
                                           gboolean            available);
 
-gboolean
+EXPORT_API gboolean
 gssdp_resource_group_get_available       (GSSDPResourceGroup *resource_group);
 
-void
+EXPORT_API void
 gssdp_resource_group_set_message_delay         (GSSDPResourceGroup *resource_group,
                                                 guint               message_delay);
 
-guint
+EXPORT_API guint
 gssdp_resource_group_get_message_delay         (GSSDPResourceGroup *resource_group);
 
-guint
+EXPORT_API guint
 gssdp_resource_group_add_resource        (GSSDPResourceGroup *resource_group,
                                           const char         *target,
                                           const char         *usn,
                                           GList              *locations);
 
-guint
+EXPORT_API guint
 gssdp_resource_group_add_resource_simple (GSSDPResourceGroup *resource_group,
                                           const char         *target,
                                           const char         *usn,
                                           const char         *location);
 
-void
+EXPORT_API void
 gssdp_resource_group_remove_resource     (GSSDPResourceGroup *resource_group,
                                           guint               resource_id);
 

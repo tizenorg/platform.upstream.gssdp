@@ -1,4 +1,4 @@
-/* 
+/*
  * Copyright (C) 2006, 2007 OpenedHand Ltd.
  *
  * Author: Jorn Baayen <jorn@openedhand.com>
@@ -24,9 +24,14 @@
 
 #include <glib-object.h>
 
+#ifndef EXPORT_API
+#define EXPORT_API
+#endif // EXPORT_API
+
+
 G_BEGIN_DECLS
 
-GType
+EXPORT_API GType
 gssdp_client_get_type (void) G_GNUC_CONST;
 
 #define GSSDP_TYPE_CLIENT \
@@ -70,37 +75,37 @@ struct _GSSDPClientClass {
         void (* _gssdp_reserved4) (void);
 };
 
-GSSDPClient *
+EXPORT_API GSSDPClient *
 gssdp_client_new              (GMainContext *main_context,
                                const char   *iface,
                                GError      **error);
 
 #ifndef GSSDP_DISABLE_DEPRECATED
-GMainContext *
+EXPORT_API GMainContext *
 gssdp_client_get_main_context (GSSDPClient  *client);
 #endif
 
-void
+EXPORT_API void
 gssdp_client_set_server_id    (GSSDPClient  *client,
                                const char   *server_id);
 
-const char *
+EXPORT_API const char *
 gssdp_client_get_server_id    (GSSDPClient  *client);
 
-const char *
+EXPORT_API const char *
 gssdp_client_get_interface    (GSSDPClient  *client);
 
-const char *
+EXPORT_API const char *
 gssdp_client_get_host_ip      (GSSDPClient  *client);
 
-void
+EXPORT_API void
 gssdp_client_set_network      (GSSDPClient  *client,
                                const char   *network);
 
-const char *
+EXPORT_API const char *
 gssdp_client_get_network      (GSSDPClient  *client);
 
-gboolean
+EXPORT_API gboolean
 gssdp_client_get_active       (GSSDPClient  *client);
 
 G_END_DECLS

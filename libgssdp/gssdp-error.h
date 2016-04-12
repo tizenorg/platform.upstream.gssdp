@@ -1,4 +1,4 @@
-/* 
+/*
  * Copyright (C) 2006, 2007 OpenedHand Ltd.
  *
  * Author: Jorn Baayen <jorn@openedhand.com>
@@ -24,9 +24,14 @@
 
 #include <glib.h>
 
+#ifndef EXPORT_API
+#define EXPORT_API
+#endif // EXPORT_API
+
+
 G_BEGIN_DECLS
 
-GQuark
+EXPORT_API GQuark
 gssdp_error_quark (void) G_GNUC_CONST;
 
 #define GSSDP_ERROR (gssdp_error_quark ())

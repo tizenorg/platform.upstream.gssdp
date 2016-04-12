@@ -26,7 +26,7 @@
 
 G_BEGIN_DECLS
 
-GType
+EXPORT_API GType
 gssdp_resource_browser_get_type (void) G_GNUC_CONST;
 
 #define GSSDP_TYPE_RESOURCE_BROWSER \
@@ -49,6 +49,11 @@ gssdp_resource_browser_get_type (void) G_GNUC_CONST;
                 (G_TYPE_INSTANCE_GET_CLASS ((obj), \
                  GSSDP_TYPE_RESOURCE_BROWSER, \
                  GSSDPResourceBrowserClass))
+                 
+                 #ifndef EXPORT_API
+                 #define EXPORT_API
+                 #endif // EXPORT_API
+                 
 
 typedef struct _GSSDPResourceBrowserPrivate GSSDPResourceBrowserPrivate;
 typedef struct _GSSDPResourceBrowser GSSDPResourceBrowser;
@@ -85,35 +90,35 @@ struct _GSSDPResourceBrowserClass {
  **/
 #define GSSDP_ALL_RESOURCES "ssdp:all"
 
-GSSDPResourceBrowser *
+EXPORT_API GSSDPResourceBrowser *
 gssdp_resource_browser_new        (GSSDPClient          *client,
                                    const char           *target);
 
-GSSDPClient *
+EXPORT_API GSSDPClient *
 gssdp_resource_browser_get_client (GSSDPResourceBrowser *resource_browser);
 
-void
+EXPORT_API void
 gssdp_resource_browser_set_target (GSSDPResourceBrowser *resource_browser,
                                    const char           *target);
 
-const char *
+EXPORT_API const char *
 gssdp_resource_browser_get_target (GSSDPResourceBrowser *resource_browser);
 
-void
+EXPORT_API void
 gssdp_resource_browser_set_mx     (GSSDPResourceBrowser *resource_browser,
                                    gushort               mx);
 
-gushort
+EXPORT_API gushort
 gssdp_resource_browser_get_mx     (GSSDPResourceBrowser *resource_browser);
 
-void
+EXPORT_API void
 gssdp_resource_browser_set_active (GSSDPResourceBrowser *resource_browser,
                                    gboolean              active);
 
-gboolean
+EXPORT_API gboolean
 gssdp_resource_browser_get_active (GSSDPResourceBrowser *resource_browser);
 
-gboolean
+EXPORT_API gboolean
 gssdp_resource_browser_rescan     (GSSDPResourceBrowser *resource_browser);
 
 G_END_DECLS
