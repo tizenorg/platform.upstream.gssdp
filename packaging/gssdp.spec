@@ -13,8 +13,10 @@ BuildRequires:  pkgconfig(glib-2.0)
 BuildRequires:  pkgconfig(libxml-2.0)
 #BuildRequires:  pkgconfig(gconf-2.0)
 BuildRequires:  pkgconfig(libsoup-2.4)
-#BuildRequires:  gobject-introspection-devel
-#BuildRequires:  vala
+%if "%{profile}" == "ivi"
+BuildRequires:  gobject-introspection-devel
+BuildRequires:  vala
+%endif
 
 
 %description
@@ -37,14 +39,18 @@ Development files for gssdp.
 %setup -q -n %{name}-%{version}
 
 %build
+%if "%{profile}" == "ivi"
+%configure --prefix=/usr --enable-introspection=yes --enable-gtk-doc-html=no
+%else
 %configure --prefix=/usr --enable-introspection=no --enable-gtk-doc-html=no
- 
+%endif
+
 make %{?jobs:-j%jobs}
 
 %install
 rm -rf %{buildroot}
 %make_install
-rm -rf %{buildroot}/usr/share/
+rm -rf %{buildroot}/usr/share/gtk-doc
 mkdir -p %{buildroot}/usr/share/license
 cp COPYING %{buildroot}/usr/share/license/%{name}
 
@@ -68,4 +74,9 @@ rm -rf %{buildroot}
 #%{_libdir}/*.a
 %{_libdir}/*.so
 %{_libdir}/pkgconfig/*
-
+%if "%{profile}" == "ivi"
+%{_libdir}/girepository-1.0/GSSDP-1.0.typelib
+%{_datadir}/gir-1.0/GSSDP-1.0.gir
+%{_datadir}/vala/vapi/gssdp-1.0.deps
+%{_datadir}/vala/vapi/gssdp-1.0.vapi
+%endif
